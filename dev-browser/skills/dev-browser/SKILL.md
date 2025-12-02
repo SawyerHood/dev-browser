@@ -17,6 +17,8 @@ You should make sure to run it in the background
 cd dev-browser && bun run start-server &
 ```
 
+**Important:** Scripts must be run with `bun x tsx` (not `bun run`) due to Playwright WebSocket compatibility:
+
 The server starts a Chromium browser and exposes a WebSocket endpoint (default: `ws://127.0.0.1:9222/...`). Clients connect directly to this endpoint.
 
 ## How It Works
@@ -28,12 +30,12 @@ The server starts a Chromium browser and exposes a WebSocket endpoint (default: 
 
 ## Writing Scripts
 
-Write scripts to `dev-browser/tmp/` with unique names (e.g., `dev-browser/tmp/navigate-login.ts`, `dev-browser/tmp/fill-form.ts`) and run them with `bun run dev-browser/tmp/<script-name>.ts`.
+Write scripts to `tmp/` with unique names (e.g., `navigate-login.ts`, `fill-form.ts`) and run them with `bun x tsx tmp/<script-name>.ts`.
 
 Make sure the tmp directory exists:
 
 ```bash
-mkdir -p dev-browser/tmp
+mkdir -p tmp
 ```
 
 ### Basic Template
@@ -174,8 +176,8 @@ const items = await page.$$eval(".item", (els) =>
 ### Screenshots
 
 ```typescript
-await page.screenshot({ path: "dev-browser/tmp/screenshot.png" });
-await page.screenshot({ path: "dev-browser/tmp/full.png", fullPage: true });
+await page.screenshot({ path: "tmp/screenshot.png" });
+await page.screenshot({ path: "tmp/full.png", fullPage: true });
 ```
 
 ### Evaluating JavaScript
@@ -213,13 +215,14 @@ If a script fails, the page state is preserved. You can:
 3. Write a recovery script to get back on track
 
 ```typescript
-// Recovery script - check current state (save as dev-browser/tmp/debug-state.ts)
+// Recovery script - check current state
+// Save as dev-browser/tmp/debug-state.ts and run with: bun x tsx tmp/debug-state.ts
 import { connect } from "dev-browser/client";
 
 const client = await connect("ws://127.0.0.1:9222/<guid>");
 const page = await client.page("main");
 
-await page.screenshot({ path: "dev-browser/tmp/debug.png" });
+await page.screenshot({ path: "tmp/debug.png" });
 console.log({
   url: page.url(),
   title: await page.title(),

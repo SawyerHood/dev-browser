@@ -7,11 +7,15 @@
     "./client": "./src/client.ts"
   },
   "scripts": {
-    "dev": "bun run --watch src/index.ts",
-    "build": "bun build src/index.ts --outdir dist --target bun",
-    "start": "bun run src/index.ts"
+    "dev": "bun x tsx --watch src/index.ts",
+    "build": "bun x tsup src/index.ts src/client.ts --format esm --dts",
+    "start": "bun x tsx src/index.ts"
   },
   "dependencies": {
     "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "tsup": "^8.0.0"
   }
 }

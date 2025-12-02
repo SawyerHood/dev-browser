@@ -27,9 +27,26 @@ export async function serve(
   const wsEndpoint = browserServer.wsEndpoint();
   console.log(`Browser server started at: ${wsEndpoint}`);
 
+  // Cleanup function to close the browser server
+  const cleanup = async () => {
+    console.log("\nShutting down browser server...");
+    await browserServer.close();
+    console.log("Browser server stopped.");
+    process.exit(0);
+  };
+
+  // Register signal handlers to ensure browser server is cleaned up on process exit
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+  process.on("SIGHUP", cleanup);
+
   return {
     wsEndpoint,
     async stop() {
+      // Remove signal handlers when manually stopped to avoid double cleanup
+      process.off("SIGINT", cleanup);
+      process.off("SIGTERM", cleanup);
+      process.off("SIGHUP", cleanup);
       await browserServer.close();
     },
   };
