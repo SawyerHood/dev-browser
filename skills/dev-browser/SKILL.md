@@ -23,11 +23,14 @@ First, start the dev-browser server. It will automatically install Chromium on f
 cd skills/dev-browser && bun run start-server &
 ```
 
-The server automatically:
+**Wait for the `Ready` message before running scripts.** On first run, the server will:
 
-- Creates the `tmp/` directory for scripts
-- Creates the `profiles/` directory for browser data persistence
-- Installs Playwright Chromium browser if not already installed
+- Install dependencies if needed
+- Download and install Playwright Chromium browser
+- Create the `tmp/` directory for scripts
+- Create the `profiles/` directory for browser data persistence
+
+The first run may take longer while dependencies are installed. Subsequent runs will start faster.
 
 **Important:** Scripts must be run with `bun x tsx` (not `bun run`) due to Playwright WebSocket compatibility.
 

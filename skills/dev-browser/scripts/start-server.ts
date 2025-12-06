@@ -1,6 +1,6 @@
 import { serve } from "@/index.js";
 import { execSync } from "child_process";
-import { mkdirSync, existsSync } from "fs";
+import { mkdirSync, existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -35,14 +35,26 @@ function findPackageManager(): { name: string; command: string } | null {
   return null;
 }
 
-try {
-  // Try to find the Playwright browser cache directory
-  // Playwright stores browsers in ~/.cache/ms-playwright on Linux/Mac
+function isChromiumInstalled(): boolean {
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
   const playwrightCacheDir = join(homeDir, ".cache", "ms-playwright");
 
   if (!existsSync(playwrightCacheDir)) {
-    console.log("Playwright browsers not found. Installing Chromium...");
+    return false;
+  }
+
+  // Check for chromium directories (e.g., chromium-1148, chromium_headless_shell-1148)
+  try {
+    const entries = readdirSync(playwrightCacheDir);
+    return entries.some((entry) => entry.startsWith("chromium"));
+  } catch {
+    return false;
+  }
+}
+
+try {
+  if (!isChromiumInstalled()) {
+    console.log("Playwright Chromium not found. Installing (this may take a minute)...");
 
     const pm = findPackageManager();
     if (!pm) {
@@ -53,7 +65,7 @@ try {
     execSync(pm.command, { stdio: "inherit" });
     console.log("Chromium installed successfully.");
   } else {
-    console.log("Playwright browsers already installed.");
+    console.log("Playwright Chromium already installed.");
   }
 } catch (error) {
   console.error("Failed to install Playwright browsers:", error);
@@ -91,6 +103,7 @@ console.log(`Dev browser server started`);
 console.log(`  WebSocket: ${server.wsEndpoint}`);
 console.log(`  Tmp directory: ${tmpDir}`);
 console.log(`  Profile directory: ${profileDir}`);
+console.log(`\nReady`);
 console.log(`\nPress Ctrl+C to stop`);
 
 // Keep the process running
