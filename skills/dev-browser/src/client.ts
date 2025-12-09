@@ -373,25 +373,22 @@ export async function connect(serverUrl: string): Promise<DevBrowserClient> {
       const page = await getPage(name);
 
       // Find the element using the stored refs
-      const elementHandle = await page.evaluateHandle(
-        (refId: string) => {
-          // Note: page.evaluateHandle runs in browser context where globalThis is the window
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const w = globalThis as any;
-          const refs = w.__devBrowserRefs;
-          if (!refs) {
-            throw new Error("No snapshot refs found. Call getAISnapshot first.");
-          }
-          const element = refs[refId];
-          if (!element) {
-            throw new Error(
-              `Ref "${refId}" not found. Available refs: ${Object.keys(refs).join(", ")}`
-            );
-          }
-          return element;
-        },
-        ref
-      );
+      const elementHandle = await page.evaluateHandle((refId: string) => {
+        // Note: page.evaluateHandle runs in browser context where globalThis is the window
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const w = globalThis as any;
+        const refs = w.__devBrowserRefs;
+        if (!refs) {
+          throw new Error("No snapshot refs found. Call getAISnapshot first.");
+        }
+        const element = refs[refId];
+        if (!element) {
+          throw new Error(
+            `Ref "${refId}" not found. Available refs: ${Object.keys(refs).join(", ")}`
+          );
+        }
+        return element;
+      }, ref);
 
       // Check if we got an element
       const element = elementHandle.asElement();
