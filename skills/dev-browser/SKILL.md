@@ -25,6 +25,12 @@ First, start the dev-browser server using the startup script:
 
 The script will automatically install dependencies and start the server. It will also install Chromium on first run if needed.
 
+### Flags
+
+The server script accepts the following flags:
+
+- `--headless` - Start the browser in headless mode (no visible browser window). Use if the user asks for it.
+
 **Wait for the `Ready` message before running scripts.** On first run, the server will:
 
 - Install dependencies if needed
