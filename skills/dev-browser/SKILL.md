@@ -17,10 +17,14 @@ Browser automation that maintains page state across script executions. Write sma
 
 ## Setup
 
-First, start the dev-browser server. It will automatically install Chromium on first run if needed:
+First, start the dev-browser server.
+
+You need to install dependencies first so that the server can start.
+
+It will automatically install Chromium on first run if needed:
 
 ```bash
-cd skills/dev-browser && bun run start-server &
+cd skills/dev-browser && bun i && bun run start-server &
 ```
 
 **Wait for the `Ready` message before running scripts.** On first run, the server will:
