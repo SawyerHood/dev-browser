@@ -158,6 +158,10 @@ await client.disconnect(); // Disconnect (pages persist)
 // ARIA Snapshot methods for element discovery and interaction
 const snapshot = await client.getAISnapshot("name"); // Get ARIA accessibility tree
 const element = await client.selectSnapshotRef("name", "e5"); // Get element by ref
+
+// Frame-aware helpers for embedded widgets (Stripe, PayPal, etc.)
+const result = await client.findInFrames("name", "input[name='card']"); // Find in any frame
+const formResult = await client.fillForm("name", { "Card Number": "4242..." }); // Smart form fill
 ```
 
 The `page` object is a standard Playwright Page—use normal Playwright methods.
@@ -284,12 +288,85 @@ await client.disconnect();
 EOF
 ```
 
+## Working with Iframes (Stripe, PayPal, etc.)
+
+Payment forms and embedded widgets often use iframes that are invisible to normal selectors. Use `findInFrames()` and `fillForm()` to work with these.
+
+### Finding Elements in Iframes
+
+`findInFrames()` searches all frames (main + nested) for an element:
+
+```bash
+cd skills/dev-browser && bun x tsx <<'EOF'
+import { connect, waitForPageLoad } from "@/client.js";
+
+const client = await connect();
+const page = await client.page("checkout");
+
+await page.goto("https://example.com/checkout");
+await waitForPageLoad(page);
+
+// Find card input in Stripe iframe
+const result = await client.findInFrames("checkout", 'input[name="cardnumber"]');
+if (result.element) {
+  console.log("Found in:", result.frameInfo); // e.g., "(unnamed) [Stripe]: https://js.stripe.com/..."
+  await result.element.fill("4242424242424242");
+} else {
+  console.log("Not found:", result.frameInfo);
+}
+
+await client.disconnect();
+EOF
+```
+
+### Smart Form Filling
+
+`fillForm()` finds fields by label, name, placeholder, or aria-label—across all frames:
+
+```bash
+cd skills/dev-browser && bun x tsx <<'EOF'
+import { connect, waitForPageLoad } from "@/client.js";
+
+const client = await connect();
+const page = await client.page("checkout");
+
+await page.goto("https://example.com/checkout");
+await waitForPageLoad(page);
+
+// Fill form using field labels - works across frames
+const result = await client.fillForm("checkout", {
+  "Card Number": "4242424242424242",
+  "Expiration Date": "12/25",
+  "CVC": "123",
+  "Name on Card": "Test User"
+}, { submit: true });
+
+console.log("Filled:", result.filled);
+console.log("Not found:", result.notFound);
+console.log("Submitted:", result.submitted);
+
+await client.disconnect();
+EOF
+```
+
+### Options
+
+**findInFrames options:**
+- `timeout` - Max wait time in ms (default: 5000)
+- `includeMainFrame` - Search main frame too (default: true)
+
+**fillForm options:**
+- `timeout` - Max wait per field in ms (default: 5000)
+- `submit` - Click submit button after filling (default: false)
+- `clear` - Clear fields before filling (default: true)
+
 ## Debugging Tips
 
 1. **Use getAISnapshot** to see what elements are available and their refs
 2. **Take screenshots** when you need visual context
 3. **Use waitForSelector** before interacting with dynamic content
 4. **Check page.url()** to confirm navigation worked
+5. **Use findInFrames** when selectors work in DevTools but not in scripts (likely in iframe)
 
 ## Error Recovery
 

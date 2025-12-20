@@ -1,4 +1,4 @@
-import { chromium, type Browser, type Page, type ElementHandle } from "playwright";
+import { chromium, type Browser, type Page, type ElementHandle, type Frame } from "playwright";
 import type {
   GetPageRequest,
   GetPageResponse,
@@ -6,6 +6,52 @@ import type {
   ServerInfoResponse,
 } from "./types";
 import { getSnapshotScript } from "./snapshot/browser-script";
+
+/**
+ * Options for finding elements in frames
+ */
+export interface FindInFramesOptions {
+  /** Maximum time to wait for element in ms (default: 5000) */
+  timeout?: number;
+  /** Include main frame in search (default: true) */
+  includeMainFrame?: boolean;
+}
+
+/**
+ * Result of finding an element in frames
+ */
+export interface FindInFramesResult {
+  /** The element handle if found */
+  element: ElementHandle | null;
+  /** The frame containing the element */
+  frame: Frame | null;
+  /** Frame name or src for debugging */
+  frameInfo: string;
+}
+
+/**
+ * Options for filling forms
+ */
+export interface FillFormOptions {
+  /** Maximum time to wait for elements in ms (default: 5000) */
+  timeout?: number;
+  /** Submit form after filling (default: false) */
+  submit?: boolean;
+  /** Clear fields before filling (default: true) */
+  clear?: boolean;
+}
+
+/**
+ * Result of filling a form
+ */
+export interface FillFormResult {
+  /** Fields that were successfully filled */
+  filled: string[];
+  /** Fields that could not be found */
+  notFound: string[];
+  /** Whether form was submitted (if requested) */
+  submitted: boolean;
+}
 
 /**
  * Options for waiting for page load
@@ -222,6 +268,26 @@ export interface DevBrowserClient {
    * Refs persist across Playwright connections.
    */
   selectSnapshotRef: (name: string, ref: string) => Promise<ElementHandle | null>;
+  /**
+   * Find an element across all frames (including iframes like Stripe, PayPal).
+   * Searches main frame and all nested iframes for the selector.
+   * Useful for payment forms and embedded widgets.
+   */
+  findInFrames: (
+    name: string,
+    selector: string,
+    options?: FindInFramesOptions
+  ) => Promise<FindInFramesResult>;
+  /**
+   * Smart form filling using field labels, names, or placeholders.
+   * Automatically finds fields by matching labels, aria-labels, names, or placeholders.
+   * Works across frames (including Stripe iframes).
+   */
+  fillForm: (
+    name: string,
+    fields: Record<string, string>,
+    options?: FillFormOptions
+  ) => Promise<FillFormResult>;
 }
 
 export async function connect(serverUrl = "http://localhost:9222"): Promise<DevBrowserClient> {
@@ -398,6 +464,167 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
       }
 
       return element;
+    },
+
+    async findInFrames(
+      name: string,
+      selector: string,
+      options: FindInFramesOptions = {}
+    ): Promise<FindInFramesResult> {
+      const { timeout = 5000, includeMainFrame = true } = options;
+      const page = await getPage(name);
+
+      // Get all frames (including nested)
+      const allFrames = page.frames();
+
+      // Try each frame
+      for (const frame of allFrames) {
+        // Skip main frame if not wanted
+        if (!includeMainFrame && frame === page.mainFrame()) {
+          continue;
+        }
+
+        try {
+          // Wait briefly for element in this frame
+          const element = await frame.waitForSelector(selector, {
+            timeout: Math.min(timeout / allFrames.length, 1000),
+            state: "attached",
+          });
+
+          if (element) {
+            // Build frame info for debugging
+            const frameName = frame.name() || "(unnamed)";
+            const frameUrl = frame.url();
+            const isStripe = frameUrl.includes("stripe");
+            const isPaypal = frameUrl.includes("paypal");
+            const badge = isStripe ? " [Stripe]" : isPaypal ? " [PayPal]" : "";
+            const frameInfo = `${frameName}${badge}: ${frameUrl.substring(0, 60)}`;
+
+            return {
+              element,
+              frame,
+              frameInfo,
+            };
+          }
+        } catch {
+          // Element not in this frame, continue
+        }
+      }
+
+      // Not found in any frame
+      return {
+        element: null,
+        frame: null,
+        frameInfo: "Element not found in any frame",
+      };
+    },
+
+    async fillForm(
+      name: string,
+      fields: Record<string, string>,
+      options: FillFormOptions = {}
+    ): Promise<FillFormResult> {
+      const { timeout = 5000, submit = false, clear = true } = options;
+      const page = await getPage(name);
+      const allFrames = page.frames();
+
+      const filled: string[] = [];
+      const notFound: string[] = [];
+
+      for (const [fieldLabel, value] of Object.entries(fields)) {
+        let found = false;
+
+        // Build selectors to try - from most specific to least
+        const normalizedLabel = fieldLabel.toLowerCase().trim();
+        const selectors = [
+          // Exact matches
+          `input[name="${fieldLabel}"]`,
+          `input[name="${normalizedLabel}"]`,
+          `input[id="${fieldLabel}"]`,
+          `input[id="${normalizedLabel}"]`,
+          `select[name="${fieldLabel}"]`,
+          `select[name="${normalizedLabel}"]`,
+          `textarea[name="${fieldLabel}"]`,
+          // Placeholder matches
+          `input[placeholder*="${fieldLabel}" i]`,
+          `input[placeholder*="${normalizedLabel}" i]`,
+          // Aria-label matches
+          `input[aria-label*="${fieldLabel}" i]`,
+          `[aria-label*="${fieldLabel}" i]`,
+          // Data attribute matches (common in Stripe)
+          `[data-elements-stable-field-name="${normalizedLabel}"]`,
+          // Label association
+          `label:has-text("${fieldLabel}") + input`,
+          `label:has-text("${fieldLabel}") input`,
+        ];
+
+        // Try each frame
+        for (const frame of allFrames) {
+          if (found) break;
+
+          for (const selector of selectors) {
+            try {
+              const element = await frame.waitForSelector(selector, {
+                timeout: Math.min(timeout / (allFrames.length * selectors.length), 200),
+                state: "attached",
+              });
+
+              if (element) {
+                // Clear if requested
+                if (clear) {
+                  await element.click({ clickCount: 3 }); // Select all
+                  await page.keyboard.press("Backspace");
+                }
+
+                // Fill the field
+                await element.fill(value);
+                filled.push(fieldLabel);
+                found = true;
+                break;
+              }
+            } catch {
+              // Selector not found in this frame, continue
+            }
+          }
+        }
+
+        if (!found) {
+          notFound.push(fieldLabel);
+        }
+      }
+
+      // Submit if requested and we filled at least one field
+      let submitted = false;
+      if (submit && filled.length > 0) {
+        try {
+          // Try common submit patterns
+          const submitSelectors = [
+            'button[type="submit"]',
+            'input[type="submit"]',
+            'button:has-text("Submit")',
+            'button:has-text("Pay")',
+            'button:has-text("Continue")',
+            'button:has-text("Place Order")',
+          ];
+
+          for (const selector of submitSelectors) {
+            try {
+              const btn = await page.waitForSelector(selector, { timeout: 500 });
+              if (btn) {
+                await btn.click();
+                submitted = true;
+                break;
+              }
+            } catch {
+              // Continue trying
+            }
+          }
+        } catch {
+          // Submit failed
+        }
+      }
+
+      return { filled, notFound, submitted };
     },
   };
 }
