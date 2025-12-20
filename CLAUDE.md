@@ -4,31 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build and Development Commands
 
-Always use Bun instead of Node.js/npm/pnpm.
+Always use Node.js/npm instead of Bun.
 
 ```bash
 # Install dependencies (from skills/dev-browser/ directory)
-cd skills/dev-browser && bun install
+cd skills/dev-browser && npm install
 
 # Start the dev-browser server
-cd skills/dev-browser && bun run start-server
+cd skills/dev-browser && npm run start-server
 
 # Run dev mode with watch
-cd skills/dev-browser && bun run dev
+cd skills/dev-browser && npm run dev
 
 # Run tests (uses vitest)
-cd skills/dev-browser && bun run test
+cd skills/dev-browser && npm test
 
 # Run TypeScript check
-cd skills/dev-browser && bun x tsc --noEmit
+cd skills/dev-browser && npx tsc --noEmit
 ```
 
 ## Important: Before Completing Code Changes
 
 **Always run these checks before considering a task complete:**
 
-1. **TypeScript check**: `bun x tsc --noEmit` - Ensure no type errors
-2. **Tests**: `bun run test` - Ensure all tests pass
+1. **TypeScript check**: `npx tsc --noEmit` - Ensure no type errors
+2. **Tests**: `npm test` - Ensure all tests pass
 
 Common TypeScript issues in this codebase:
 
@@ -95,8 +95,8 @@ await page.goto("https://example.com");
 await client.disconnect(); // Disconnects CDP but page stays alive on server
 ```
 
-## Bun-Specific Guidelines
+## Node.js Guidelines
 
-- Use `bun x tsx` for running TypeScript files
-- Bun auto-loads `.env` files (no dotenv needed)
-- Prefer `Bun.file` over `node:fs` where possible
+- Use `npx tsx` for running TypeScript files
+- Use `dotenv` or similar if you need to load `.env` files
+- Use `node:fs` for file system operations

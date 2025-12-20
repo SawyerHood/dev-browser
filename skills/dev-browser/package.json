@@ -6,8 +6,8 @@
     "@/*": "./src/*"
   },
   "scripts": {
-    "start-server": "bun x tsx scripts/start-server.ts",
-    "dev": "bun x tsx --watch src/index.ts",
+    "start-server": "npx tsx scripts/start-server.ts",
+    "dev": "npx tsx --watch src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -17,8 +17,8 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 echo "Installing dependencies..."
-bun i
+npm install
 
 echo "Starting dev-browser server..."
 export HEADLESS=$HEADLESS
-bun x tsx scripts/start-server.ts
+npx tsx scripts/start-server.ts

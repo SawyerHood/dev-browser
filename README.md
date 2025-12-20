@@ -28,10 +28,7 @@ In practice, Claude will often explore a page step-by-step first, then generate 
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed
-- [Bun](https://bun.sh) runtime (v1.0 or later)
-  ```bash
-  curl -fsSL https://bun.sh/install | bash
-  ```
+- [Node.js](https://nodejs.org) (v18 or later) with npm
 
 ## Installation
 
@@ -81,8 +78,8 @@ Before using the skill, start the dev-browser server in a separate terminal:
 
 ```bash
 cd ~/.claude/skills/dev-browser
-bun install  # First time only
-bun run start-server
+npm install  # First time only
+npm run start-server
 ```
 
 Keep this terminal running while you use Amp.
@@ -134,14 +131,14 @@ Add to your `~/.claude/settings.json` (user-level, applies to all projects):
 ```json
 {
   "permissions": {
-    "allow": ["Skill(dev-browser:dev-browser)", "Bash(bun x tsx:*)"],
+    "allow": ["Skill(dev-browser:dev-browser)", "Bash(npx tsx:*)"],
     "deny": [],
     "ask": []
   }
 }
 ```
 
-This allowlists the dev-browser skill and the `bun x tsx` command that runs the browser automation scripts, regardless of which directory the skill is installed in.
+This allowlists the dev-browser skill and the `npx tsx` command that runs the browser automation scripts, regardless of which directory the skill is installed in.
 
 For project-level settings, add to `.claude/settings.json` in your project root.
 
