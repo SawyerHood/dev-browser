@@ -5,7 +5,7 @@ description: Browser automation with persistent page state. Use when users ask t
 
 # Dev Browser Skill
 
-Browser automation that maintains page state across script executions. Write small, focused scripts to accomplish tasks incrementally.
+Browser automation that maintains page state across script executions. Write small, focused scripts to accomplish tasks incrementally. Once you've proven out part of a workflow and there is repeated work to be done, you can write a script to do the repeated work in a single execution.
 
 ## Choosing Your Approach
 
@@ -31,9 +31,7 @@ Add `--headless` flag if user requests it. **Wait for the `Ready` message before
 
 Connects to user's existing Chrome browser. Use this when:
 
-- The user is already logged into sites and wants to automate their current session
-- The user wants to work alongside the automation (can see and help with captchas, etc.)
-- You need to automate tabs the user has already opened
+- The user is already logged into sites and wants you to do things behind an authed experience that isn't local dev.
 - The user asks you to use the extension
 
 **Start the relay server:**
@@ -46,10 +44,9 @@ Wait for `Waiting for extension to connect...`
 
 **Workflow:**
 
-1. User opens Chrome and navigates to sites they want to automate
-2. User clicks extension icon on each tab to attach
-3. Scripts call `client.page("name")` to assign names and get page handles
-4. Automation runs on the user's actual browser session
+1. User clicks extension icon on each tab to attach
+2. Scripts call `client.page("name")` just like the normal mode to create new pages / connect to existing ones.
+3. Automation runs on the user's actual browser session
 
 If the extension hasn't connected yet, tell the user to launch and activate it. Download link: https://github.com/SawyerHood/dev-browser/releases
 
@@ -85,6 +82,16 @@ EOF
 4. **Disconnect to exit**: `await client.disconnect()` - pages persist on server
 5. **Plain JS in evaluate**: `page.evaluate()` runs in browser - no TypeScript syntax
 
+## Workflow Loop
+
+Follow this pattern for complex tasks:
+
+1. **Write a script** to perform one action
+2. **Run it** and observe the output
+3. **Evaluate** - did it work? What's the current state?
+4. **Decide** - is the task complete or do we need another script?
+5. **Repeat** until task is done
+
 ### No TypeScript in Browser Context
 
 Code passed to `page.evaluate()` runs in the browser, which doesn't understand TypeScript:
@@ -103,8 +110,18 @@ const text = await page.evaluate(() => {
 
 ## Scraping Data
 
-If the user is asking you to extract large amounts of data. Be smart about it. Often directly interacting with the dom is not the most
-optimal way to do this. Instead you should consider tracing network calls and replaying them to extract data from apis.
+  For large datasets (followers, posts, search results), **intercept and replay network requests** rather than parsing the DOM. This is faster, more reliable, and handles pagination automatically.
+
+  ### Approach
+
+  1. **Intercept API responses**: Use `page.on('response')` to capture data from `/api/` or `/graphql/` endpoints
+  2. **Inspect the schema first**: Save responses to `tmp/response.json` to understand the data structure before writing extraction code
+  3. **Replay with pagination**: Once you understand the API, replay requests directly with cursor/pagination parameters instead of scrolling
+  4. **Use Set for deduplication**: APIs often return overlapping data across pages
+
+  ### Tips
+
+  - **Extension mode limitation**: `page.context().cookies()` doesn't work - capture auth headers from intercepted requests instead
 ```
 
 ## Client API
