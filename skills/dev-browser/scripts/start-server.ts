@@ -72,14 +72,19 @@ try {
   console.log("You may need to run: npx playwright install chromium");
 }
 
+// Parse port configuration from environment
+const port = parseInt(process.env.PORT || "9222", 10);
+const cdpPort = process.env.CDP_PORT ? parseInt(process.env.CDP_PORT, 10) : undefined;
+const effectiveCdpPort = cdpPort || port + 1;
+
 // Check if server is already running
 console.log("Checking for existing servers...");
 try {
-  const res = await fetch("http://localhost:9222", {
+  const res = await fetch(`http://localhost:${port}`, {
     signal: AbortSignal.timeout(1000),
   });
   if (res.ok) {
-    console.log("Server already running on port 9222");
+    console.log(`Server already running on port ${port}`);
     process.exit(0);
   }
 } catch {
@@ -87,11 +92,11 @@ try {
 }
 
 // Clean up stale CDP port if HTTP server isn't running (crash recovery)
-// This handles the case where Node crashed but Chrome is still running on 9223
+// This handles the case where Node crashed but Chrome is still running
 try {
-  const pid = execSync("lsof -ti:9223", { encoding: "utf-8" }).trim();
+  const pid = execSync(`lsof -ti:${effectiveCdpPort}`, { encoding: "utf-8" }).trim();
   if (pid) {
-    console.log(`Cleaning up stale Chrome process on CDP port 9223 (PID: ${pid})`);
+    console.log(`Cleaning up stale Chrome process on CDP port ${effectiveCdpPort} (PID: ${pid})`);
     execSync(`kill -9 ${pid}`);
   }
 } catch {
@@ -101,7 +106,8 @@ try {
 console.log("Starting dev browser server...");
 const headless = process.env.HEADLESS === "true";
 const server = await serve({
-  port: 9222,
+  port,
+  cdpPort,
   headless,
   profileDir,
 });
