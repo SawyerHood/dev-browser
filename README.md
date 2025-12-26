@@ -12,6 +12,9 @@ A browser automation plugin for [Claude Code](https://docs.anthropic.com/en/docs
 
 ## Prerequisites
 
+[![Run in Smithery](https://smithery.ai/badge/skills/sawyerhood)](https://smithery.ai/skills?ns=sawyerhood&utm_source=github&utm_medium=badge)
+
+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed
 - [Node.js](https://nodejs.org) (v18 or later) with npm
 
