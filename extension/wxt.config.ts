@@ -4,7 +4,7 @@ export default defineConfig({
   manifest: {
     name: "dev-browser",
     description: "Connect your browser to dev-browser for Playwright automation",
-    permissions: ["debugger", "tabGroups", "storage"],
+    permissions: ["debugger", "tabGroups", "storage", "alarms"],
     host_permissions: ["<all_urls>"],
     icons: {
       16: "icons/icon-16.png",

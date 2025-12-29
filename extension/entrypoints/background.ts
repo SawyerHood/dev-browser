@@ -147,4 +147,26 @@ export default defineBackground(() => {
       connectionManager.startMaintaining();
     }
   });
+
+  // Set up Chrome Alarms keep-alive mechanism
+  // This ensures the connection is maintained even after service worker unloads
+  const KEEPALIVE_ALARM = "keepAlive";
+
+  // Create alarm that fires every 30 seconds
+  chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
+
+  chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === KEEPALIVE_ALARM) {
+      const state = await stateManager.getState();
+
+      if (state.isActive) {
+        const isConnected = connectionManager.isConnected();
+
+        if (!isConnected) {
+          logger.debug("Keep-alive: Connection lost, restarting...");
+          connectionManager.startMaintaining();
+        }
+      }
+    }
+  });
 });
