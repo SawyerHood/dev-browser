@@ -15,60 +15,44 @@ Browser automation that maintains page state across script executions. Write sma
 
 ## Setup
 
-Three modes available. Ask the user if unclear which to use.
-
-### Standalone Mode (Default)
-
-Launches a new Chromium browser for fresh automation sessions.
-
 ```bash
 ./skills/dev-browser/server.sh &
 ```
 
-Add `--headless` flag if user requests it. **Wait for the `Ready` message before running scripts.**
+**Wait for the `Ready` message before running scripts.**
 
-### External Browser Mode
+The server auto-detects the best browser mode based on user configuration at `~/.dev-browser/config.json`:
 
-Connects to an external browser (like Chrome for Testing) via Chrome DevTools Protocol (CDP). Use this when:
+- **External Browser** (default when Chrome for Testing is installed): Uses Chrome for Testing via CDP. Browser stays open after automation.
+- **Standalone**: Uses Playwright's built-in Chromium. Use `--standalone` flag to force this mode.
 
-- User wants to use a specific browser build (Chrome for Testing, Chrome Beta, etc.)
-- User wants the browser to stay open after automation for manual inspection
-- User wants visible browser automation for local development
-- No extension installation required
+**Flags:**
+- `--standalone` - Force standalone Playwright mode
+- `--headless` - Run headless (standalone mode only)
 
-**Start the server:**
+### Configuration
 
-```bash
-cd skills/dev-browser && BROWSER_PATH="/path/to/chrome" npx tsx scripts/start-external-browser.ts &
+Browser settings are configured in `~/.dev-browser/config.json`:
+
+```json
+{
+  "browser": {
+    "mode": "auto",
+    "path": "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+  }
+}
 ```
 
-**Environment variables:**
-- `PORT` - HTTP API port (default: 9222)
-- `CDP_PORT` - Browser's CDP port (default: 9223)
-- `BROWSER_PATH` - Path to browser executable (enables auto-launch)
-- `USER_DATA_DIR` - Browser profile directory (default: ~/.dev-browser-profile)
-- `AUTO_LAUNCH` - Auto-launch browser if not running (default: true)
+| Setting | Values | Description |
+|---------|--------|-------------|
+| `browser.mode` | `"auto"` (default), `"external"`, `"standalone"` | `auto` uses Chrome for Testing if found, otherwise Playwright |
+| `browser.path` | Path string | Custom browser executable path (auto-detected if not set) |
+| `browser.userDataDir` | Path string | Browser profile directory for external mode (uses browser's default if not set) |
 
-**Example with Chrome for Testing (macOS):**
-
-```bash
-BROWSER_PATH="/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" \
-npx tsx scripts/start-external-browser.ts &
-```
-
-**Or start the browser manually first:**
-
-```bash
-# Start Chrome for Testing with CDP enabled
-"/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" \
-  --remote-debugging-port=9223 \
-  --user-data-dir=~/.chrome-for-testing-data &
-
-# Then start the dev-browser server (no BROWSER_PATH needed)
-cd skills/dev-browser && npx tsx scripts/start-external-browser.ts &
-```
-
-**Key difference:** When you stop the dev-browser server, the browser stays open. This is by design—you manage the browser lifecycle, dev-browser just connects to it.
+**Auto-detection paths:**
+- **macOS**: `/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`
+- **Linux**: `/opt/google/chrome-for-testing/chrome`, `/usr/bin/google-chrome-for-testing`
+- **Windows**: `C:\Program Files\Google\Chrome for Testing\Application\chrome.exe`
 
 ### Extension Mode
 

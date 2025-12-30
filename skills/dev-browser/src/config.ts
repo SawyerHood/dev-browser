@@ -21,6 +21,40 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 
 /**
+ * Browser mode selection.
+ * - "auto": Detect Chrome for Testing, fall back to standalone (default)
+ * - "external": Always use external browser via CDP (fail if not found)
+ * - "standalone": Always use Playwright's built-in Chromium
+ */
+export type BrowserMode = "auto" | "external" | "standalone";
+
+/**
+ * Browser configuration for dev-browser.
+ */
+export interface BrowserConfig {
+  /**
+   * Browser mode selection (default: "auto")
+   * - "auto": Detect Chrome for Testing, fall back to standalone
+   * - "external": Always use external browser via CDP
+   * - "standalone": Always use Playwright's built-in Chromium
+   */
+  mode: BrowserMode;
+  /**
+   * Path to browser executable for external mode.
+   * If not set, uses platform-specific defaults:
+   * - macOS: /Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
+   * - Linux: /opt/google/chrome-for-testing/chrome or google-chrome-for-testing
+   * - Windows: C:\Program Files\Google\Chrome for Testing\Application\chrome.exe
+   */
+  path?: string;
+  /**
+   * User data directory for browser profile.
+   * Default: ~/.dev-browser-profile
+   */
+  userDataDir?: string;
+}
+
+/**
  * Configuration for dev-browser multi-agent support.
  */
 export interface DevBrowserConfig {
@@ -38,6 +72,8 @@ export interface DevBrowserConfig {
   };
   /** CDP port for external browser mode (default: 9223) */
   cdpPort: number;
+  /** Browser configuration */
+  browser: BrowserConfig;
 }
 
 /**
@@ -61,6 +97,41 @@ const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 const SERVERS_FILE = join(CONFIG_DIR, "active-servers.json");
 
 /**
+ * Get platform-specific default browser path for Chrome for Testing.
+ */
+function getDefaultBrowserPath(): string | undefined {
+  const platform = process.platform;
+
+  if (platform === "darwin") {
+    // macOS: Check standard installation path
+    const macPath = "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+    if (existsSync(macPath)) {
+      return macPath;
+    }
+  } else if (platform === "linux") {
+    // Linux: Check common installation paths
+    const linuxPaths = [
+      "/opt/google/chrome-for-testing/chrome",
+      "/usr/bin/google-chrome-for-testing",
+      "/usr/local/bin/chrome-for-testing",
+    ];
+    for (const path of linuxPaths) {
+      if (existsSync(path)) {
+        return path;
+      }
+    }
+  } else if (platform === "win32") {
+    // Windows: Check standard installation path
+    const winPath = "C:\\Program Files\\Google\\Chrome for Testing\\Application\\chrome.exe";
+    if (existsSync(winPath)) {
+      return winPath;
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Default configuration values.
  */
 const DEFAULT_CONFIG: DevBrowserConfig = {
@@ -70,29 +141,86 @@ const DEFAULT_CONFIG: DevBrowserConfig = {
     step: 2, // Skip odd ports to avoid CDP port collision
   },
   cdpPort: 9223,
+  browser: {
+    mode: "auto",
+    // userDataDir intentionally not set - let browser use its default profile
+    // unless user explicitly configures it in ~/.dev-browser/config.json
+  },
 };
 
 /**
  * Load configuration from ~/.dev-browser/config.json with defaults.
+ * Merges user config with defaults and resolves platform-specific browser paths.
  */
 export function loadConfig(): DevBrowserConfig {
+  let config = { ...DEFAULT_CONFIG };
+
   try {
     if (existsSync(CONFIG_FILE)) {
       const content = readFileSync(CONFIG_FILE, "utf-8");
       const userConfig = JSON.parse(content);
-      return {
+      config = {
         ...DEFAULT_CONFIG,
         ...userConfig,
         portRange: {
           ...DEFAULT_CONFIG.portRange,
           ...(userConfig.portRange || {}),
         },
+        browser: {
+          ...DEFAULT_CONFIG.browser,
+          ...(userConfig.browser || {}),
+        },
       };
     }
   } catch (err) {
     console.warn(`Warning: Could not load config from ${CONFIG_FILE}:`, err);
   }
-  return DEFAULT_CONFIG;
+
+  // Resolve browser path: user config > auto-detection > undefined
+  if (!config.browser.path) {
+    config.browser.path = getDefaultBrowserPath();
+  }
+
+  return config;
+}
+
+/**
+ * Get resolved browser configuration for use by server scripts.
+ * Returns the effective browser mode and path based on config and detection.
+ */
+export function getResolvedBrowserConfig(): {
+  mode: "external" | "standalone";
+  path?: string;
+  userDataDir?: string;
+} {
+  const config = loadConfig();
+  const { browser } = config;
+
+  // Determine effective mode
+  let effectiveMode: "external" | "standalone";
+
+  if (browser.mode === "standalone") {
+    effectiveMode = "standalone";
+  } else if (browser.mode === "external") {
+    if (!browser.path) {
+      throw new Error(
+        `Browser mode is "external" but no browser path configured or detected. ` +
+        `Set browser.path in ~/.dev-browser/config.json or install Chrome for Testing.`
+      );
+    }
+    effectiveMode = "external";
+  } else {
+    // "auto" mode: use external if browser found, otherwise standalone
+    effectiveMode = browser.path ? "external" : "standalone";
+  }
+
+  return {
+    mode: effectiveMode,
+    path: browser.path,
+    // Only include userDataDir if explicitly configured by user
+    // For external mode, let the browser use its default profile unless specified
+    userDataDir: browser.userDataDir,
+  };
 }
 
 /**

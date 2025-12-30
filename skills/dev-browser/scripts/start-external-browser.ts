@@ -51,7 +51,8 @@ mkdirSync(tmpDir, { recursive: true });
 const port = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
 const cdpPort = process.env.CDP_PORT ? parseInt(process.env.CDP_PORT, 10) : undefined;
 const browserPath = process.env.BROWSER_PATH;
-const userDataDir = process.env.USER_DATA_DIR || `${process.env.HOME}/.dev-browser-profile`;
+// Only pass userDataDir if explicitly set - let browser use default profile otherwise
+const userDataDir = process.env.USER_DATA_DIR || undefined;
 const autoLaunch = process.env.AUTO_LAUNCH !== "false";
 
 console.log("Starting dev-browser with external browser mode...");
@@ -60,7 +61,7 @@ console.log(`  CDP port: ${cdpPort ?? "from config (default: 9223)"}`);
 if (browserPath) {
   console.log(`  Browser path: ${browserPath}`);
 }
-console.log(`  User data dir: ${userDataDir}`);
+console.log(`  User data dir: ${userDataDir ?? "(default profile)"}`);
 console.log(`  Auto-launch: ${autoLaunch}`);
 console.log(`  Config: ~/.dev-browser/config.json`);
 console.log("");

@@ -17,7 +17,7 @@ import {
   unregisterServer,
   outputPortForDiscovery,
   cleanupOrphanedBrowsers,
-} from "./port-manager.js";
+} from "./config.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
@@ -28,16 +28,18 @@ export {
   type ExternalBrowserServer,
 } from "./external-browser.js";
 
-// Re-export port management utilities
+// Re-export configuration utilities
 export {
   loadConfig,
   findAvailablePort,
   cleanupOrphanedBrowsers,
   detectOrphanedBrowsers,
   type DevBrowserConfig,
+  type BrowserConfig,
+  type BrowserMode,
   type ServerInfo,
   type OrphanedBrowser,
-} from "./port-manager.js";
+} from "./config.js";
 
 export interface DevBrowserServer {
   wsEndpoint: string;

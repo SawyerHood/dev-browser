@@ -14,7 +14,7 @@ import {
   registerServer,
   unregisterServer,
   outputPortForDiscovery,
-} from "./port-manager.js";
+} from "./config.js";
 
 export interface ExternalBrowserOptions {
   /**
@@ -81,18 +81,23 @@ async function getCdpEndpoint(cdpPort: number, maxRetries = 60): Promise<string>
 function launchBrowserDetached(
   browserPath: string,
   cdpPort: number,
-  userDataDir: string
+  userDataDir?: string
 ): void {
   const args = [
     `--remote-debugging-port=${cdpPort}`,
-    `--user-data-dir=${userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
   ];
 
+  // Only add user-data-dir if explicitly configured
+  // This lets the browser use its default profile when not specified
+  if (userDataDir) {
+    args.push(`--user-data-dir=${userDataDir}`);
+  }
+
   console.log(`Launching browser: ${browserPath}`);
   console.log(`  CDP port: ${cdpPort}`);
-  console.log(`  User data: ${userDataDir}`);
+  console.log(`  User data: ${userDataDir ?? "(default profile)"}`);
 
   const child = spawn(browserPath, args, {
     detached: true,
@@ -133,7 +138,8 @@ export async function serveWithExternalBrowser(
   const cdpPort = options.cdpPort ?? config.cdpPort;
   const autoLaunch = options.autoLaunch ?? true;
   const browserPath = options.browserPath;
-  const userDataDir = options.userDataDir ?? `${process.env.HOME}/.dev-browser-profile`;
+  // Only use userDataDir if explicitly provided - let browser use default profile otherwise
+  const userDataDir = options.userDataDir;
 
   // Validate port numbers
   if (port < 1 || port > 65535) {
