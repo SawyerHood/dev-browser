@@ -16,6 +16,7 @@ import {
   registerServer,
   unregisterServer,
   outputPortForDiscovery,
+  cleanupOrphanedBrowsers,
 } from "./port-manager.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
@@ -31,7 +32,11 @@ export {
 export {
   loadConfig,
   findAvailablePort,
+  cleanupOrphanedBrowsers,
+  detectOrphanedBrowsers,
   type DevBrowserConfig,
+  type ServerInfo,
+  type OrphanedBrowser,
 } from "./port-manager.js";
 
 export interface DevBrowserServer {
@@ -100,6 +105,14 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   // Create directory if it doesn't exist
   mkdirSync(userDataDir, { recursive: true });
   console.log(`Using persistent browser profile: ${userDataDir}`);
+
+  // Clean up any orphaned browsers from previous crashed sessions
+  // This handles the case where Node crashed but Chrome is still running on the CDP port
+  const orphansCleaned = cleanupOrphanedBrowsers([cdpPort]);
+  if (orphansCleaned > 0) {
+    // Give the OS a moment to release the port
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 
   console.log("Launching browser with persistent context...");
 
@@ -213,8 +226,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     console.log(`HTTP API server running on port ${port}`);
   });
 
-  // Register this server for multi-agent coordination
-  registerServer(port, process.pid);
+  // Register this server for multi-agent coordination (standalone mode owns the browser)
+  registerServer(port, process.pid, { cdpPort, mode: "standalone" });
 
   // Output port for agent discovery (agents parse this to know which port to connect to)
   outputPortForDiscovery(port);

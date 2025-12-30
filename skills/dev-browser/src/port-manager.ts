@@ -8,6 +8,7 @@
  * This module provides:
  * - Dynamic port allocation to avoid conflicts
  * - Server tracking for coordination
+ * - Orphaned browser detection and cleanup (crash recovery)
  * - Config file support for preferences
  * - PORT=XXXX output for agent discovery
  *
@@ -15,6 +16,7 @@
  */
 
 import { createServer } from "net";
+import { execSync } from "child_process";
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 
@@ -36,6 +38,22 @@ export interface DevBrowserConfig {
   };
   /** CDP port for external browser mode (default: 9223) */
   cdpPort: number;
+}
+
+/**
+ * Information about a registered server.
+ */
+export interface ServerInfo {
+  /** Process ID of the server */
+  pid: number;
+  /** CDP port the server's browser is using (for orphan detection) */
+  cdpPort?: number;
+  /** Browser process ID (for standalone mode cleanup) */
+  browserPid?: number;
+  /** Server mode: 'standalone' owns browser, 'external' connects to shared browser */
+  mode: "standalone" | "external";
+  /** Timestamp when server was registered */
+  startedAt: string;
 }
 
 const CONFIG_DIR = join(process.env.HOME || "", ".dev-browser");
@@ -129,60 +147,108 @@ export async function findAvailablePort(config?: DevBrowserConfig): Promise<numb
 }
 
 /**
- * Register a server for coordination tracking.
- * This helps coordinate shutdown behavior across multiple servers.
+ * Check if a process exists.
  */
-export function registerServer(port: number, pid: number): void {
-  mkdirSync(CONFIG_DIR, { recursive: true });
-  let servers: Record<number, number> = {};
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Load the servers file, handling both old format (pid only) and new format (ServerInfo).
+ */
+function loadServersFile(): Record<string, ServerInfo> {
+  if (!existsSync(SERVERS_FILE)) {
+    return {};
+  }
 
   try {
-    if (existsSync(SERVERS_FILE)) {
-      servers = JSON.parse(readFileSync(SERVERS_FILE, "utf-8"));
+    const content = readFileSync(SERVERS_FILE, "utf-8");
+    const data = JSON.parse(content);
+
+    // Handle migration from old format { port: pid } to new format { port: ServerInfo }
+    const servers: Record<string, ServerInfo> = {};
+    for (const [port, value] of Object.entries(data)) {
+      if (typeof value === "number") {
+        // Old format: migrate to new format
+        servers[port] = {
+          pid: value,
+          mode: "standalone", // Assume standalone for old entries
+          startedAt: new Date().toISOString(),
+        };
+      } else {
+        // New format
+        servers[port] = value as ServerInfo;
+      }
     }
+    return servers;
   } catch {
-    servers = {};
+    return {};
   }
+}
 
-  // Clean up stale entries (processes that no longer exist)
-  for (const [portStr, serverPid] of Object.entries(servers)) {
-    try {
-      process.kill(serverPid as number, 0); // Check if process exists
-    } catch {
-      delete servers[parseInt(portStr)];
+/**
+ * Save the servers file.
+ */
+function saveServersFile(servers: Record<string, ServerInfo>): void {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(SERVERS_FILE, JSON.stringify(servers, null, 2));
+}
+
+/**
+ * Clean up stale entries from servers file (processes that no longer exist).
+ */
+function cleanupStaleEntries(servers: Record<string, ServerInfo>): Record<string, ServerInfo> {
+  const cleaned: Record<string, ServerInfo> = {};
+  for (const [port, info] of Object.entries(servers)) {
+    if (processExists(info.pid)) {
+      cleaned[port] = info;
     }
   }
+  return cleaned;
+}
 
-  servers[port] = pid;
-  writeFileSync(SERVERS_FILE, JSON.stringify(servers, null, 2));
+/**
+ * Register a server for coordination tracking.
+ * This helps coordinate shutdown behavior and orphan detection.
+ */
+export function registerServer(
+  port: number,
+  pid: number,
+  options?: {
+    cdpPort?: number;
+    browserPid?: number;
+    mode?: "standalone" | "external";
+  }
+): void {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+
+  let servers = loadServersFile();
+  servers = cleanupStaleEntries(servers);
+
+  servers[port.toString()] = {
+    pid,
+    cdpPort: options?.cdpPort,
+    browserPid: options?.browserPid,
+    mode: options?.mode ?? "standalone",
+    startedAt: new Date().toISOString(),
+  };
+
+  saveServersFile(servers);
 }
 
 /**
  * Unregister a server and return the count of remaining servers.
  */
 export function unregisterServer(port: number): number {
-  let servers: Record<number, number> = {};
-
-  try {
-    if (existsSync(SERVERS_FILE)) {
-      servers = JSON.parse(readFileSync(SERVERS_FILE, "utf-8"));
-    }
-  } catch {
-    servers = {};
-  }
-
-  delete servers[port];
-
-  // Clean up stale entries
-  for (const [portStr, serverPid] of Object.entries(servers)) {
-    try {
-      process.kill(serverPid as number, 0);
-    } catch {
-      delete servers[parseInt(portStr)];
-    }
-  }
-
-  writeFileSync(SERVERS_FILE, JSON.stringify(servers, null, 2));
+  let servers = loadServersFile();
+  delete servers[port.toString()];
+  servers = cleanupStaleEntries(servers);
+  saveServersFile(servers);
   return Object.keys(servers).length;
 }
 
@@ -190,29 +256,112 @@ export function unregisterServer(port: number): number {
  * Get the count of currently active servers.
  */
 export function getActiveServerCount(): number {
+  const servers = loadServersFile();
+  const cleaned = cleanupStaleEntries(servers);
+  return Object.keys(cleaned).length;
+}
+
+/**
+ * Get process ID listening on a specific port (macOS/Linux).
+ * Returns null if no process is listening or on error.
+ */
+function getProcessOnPort(port: number): number | null {
   try {
-    if (!existsSync(SERVERS_FILE)) {
-      return 0;
-    }
+    // Works on macOS and Linux
+    const output = execSync(`lsof -ti:${port}`, {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
 
-    const servers: Record<number, number> = JSON.parse(
-      readFileSync(SERVERS_FILE, "utf-8")
-    );
-
-    // Count only servers that are still running
-    let count = 0;
-    for (const serverPid of Object.values(servers)) {
-      try {
-        process.kill(serverPid as number, 0);
-        count++;
-      } catch {
-        // Process no longer exists
-      }
+    if (output) {
+      // May return multiple PIDs, take the first one
+      const firstLine = output.split("\n")[0] ?? "";
+      const pid = parseInt(firstLine, 10);
+      return isNaN(pid) ? null : pid;
     }
-    return count;
   } catch {
-    return 0;
+    // No process on port or lsof not available
   }
+  return null;
+}
+
+/**
+ * Information about an orphaned browser.
+ */
+export interface OrphanedBrowser {
+  cdpPort: number;
+  pid: number;
+}
+
+/**
+ * Detect orphaned browsers - browsers running on CDP ports with no registered server.
+ *
+ * This handles crash recovery: if a server crashed without cleanup, its browser
+ * may still be running. This function identifies such orphans.
+ *
+ * @param cdpPorts - CDP ports to check (default: common ports 9223, 9225, etc.)
+ * @returns List of orphaned browsers
+ */
+export function detectOrphanedBrowsers(cdpPorts?: number[]): OrphanedBrowser[] {
+  const servers = loadServersFile();
+  const cleanedServers = cleanupStaleEntries(servers);
+
+  // Get CDP ports that have active servers
+  const activeCdpPorts = new Set<number>();
+  for (const info of Object.values(cleanedServers)) {
+    if (info.cdpPort) {
+      activeCdpPorts.add(info.cdpPort);
+    }
+  }
+
+  // Default ports to check if not specified
+  const portsToCheck = cdpPorts ?? [9223, 9225, 9227, 9229, 9231];
+
+  const orphans: OrphanedBrowser[] = [];
+  for (const cdpPort of portsToCheck) {
+    // Skip if an active server claims this CDP port
+    if (activeCdpPorts.has(cdpPort)) {
+      continue;
+    }
+
+    // Check if something is running on this port
+    const pid = getProcessOnPort(cdpPort);
+    if (pid !== null) {
+      orphans.push({ cdpPort, pid });
+    }
+  }
+
+  return orphans;
+}
+
+/**
+ * Clean up orphaned browsers from previous crashed sessions.
+ *
+ * This is useful for standalone mode where the server owns the browser lifecycle.
+ * Only kills processes that are truly orphaned (no registered server).
+ *
+ * @param cdpPorts - CDP ports to check for orphans
+ * @returns Number of orphaned browsers cleaned up
+ */
+export function cleanupOrphanedBrowsers(cdpPorts?: number[]): number {
+  const orphans = detectOrphanedBrowsers(cdpPorts);
+  let cleaned = 0;
+
+  for (const orphan of orphans) {
+    try {
+      console.log(
+        `Cleaning up orphaned browser on CDP port ${orphan.cdpPort} (PID: ${orphan.pid})`
+      );
+      process.kill(orphan.pid, "SIGTERM");
+      cleaned++;
+    } catch (err) {
+      console.warn(
+        `Warning: Could not kill orphaned process ${orphan.pid}: ${err}`
+      );
+    }
+  }
+
+  return cleaned;
 }
 
 /**

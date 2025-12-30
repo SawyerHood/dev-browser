@@ -282,8 +282,8 @@ export async function serveWithExternalBrowser(
     console.log(`HTTP API server running on port ${port}`);
   });
 
-  // Register this server for multi-agent coordination
-  registerServer(port, process.pid);
+  // Register this server for multi-agent coordination (external mode doesn't own the browser)
+  registerServer(port, process.pid, { cdpPort, mode: "external" });
 
   // Output port for agent discovery (agents parse this to know which port to connect to)
   outputPortForDiscovery(port);
