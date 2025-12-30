@@ -1,6 +1,6 @@
 import express, { type Express, type Request, type Response } from "express";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { spawn, execSync } from "child_process";
+import { spawn } from "child_process";
 import type { Socket } from "net";
 import type {
   GetPageRequest,
@@ -8,9 +8,20 @@ import type {
   ListPagesResponse,
   ServerInfoResponse,
 } from "./types";
+import {
+  loadConfig,
+  findAvailablePort,
+  registerServer,
+  unregisterServer,
+  outputPortForDiscovery,
+} from "./port-manager.js";
 
 export interface ExternalBrowserOptions {
-  /** HTTP API port (default: 9222) */
+  /**
+   * HTTP API port. If not specified, a port is automatically assigned
+   * from the configured range (default: 9222-9300, step 2).
+   * This enables multiple agents to run concurrently.
+   */
   port?: number;
   /** CDP port where external browser is listening (default: 9223) */
   cdpPort?: number;
@@ -115,8 +126,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 export async function serveWithExternalBrowser(
   options: ExternalBrowserOptions = {}
 ): Promise<ExternalBrowserServer> {
-  const port = options.port ?? 9222;
-  const cdpPort = options.cdpPort ?? 9223;
+  const config = loadConfig();
+
+  // Use dynamic port allocation if port not specified
+  const port = options.port ?? await findAvailablePort(config);
+  const cdpPort = options.cdpPort ?? config.cdpPort;
   const autoLaunch = options.autoLaunch ?? true;
   const browserPath = options.browserPath;
   const userDataDir = options.userDataDir ?? `${process.env.HOME}/.dev-browser-profile`;
@@ -268,6 +282,12 @@ export async function serveWithExternalBrowser(
     console.log(`HTTP API server running on port ${port}`);
   });
 
+  // Register this server for multi-agent coordination
+  registerServer(port, process.pid);
+
+  // Output port for agent discovery (agents parse this to know which port to connect to)
+  outputPortForDiscovery(port);
+
   // Track active connections for clean shutdown
   const connections = new Set<Socket>();
   server.on("connection", (socket: Socket) => {
@@ -309,7 +329,13 @@ export async function serveWithExternalBrowser(
     }
 
     server.close();
-    console.log("Server stopped. Browser remains open.");
+
+    // Unregister this server
+    const remainingServers = unregisterServer(port);
+    console.log(
+      `Server stopped. Browser remains open. ` +
+      `${remainingServers} other server(s) still running.`
+    );
   };
 
   // Signal handlers

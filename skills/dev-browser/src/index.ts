@@ -10,6 +10,13 @@ import type {
   ListPagesResponse,
   ServerInfoResponse,
 } from "./types";
+import {
+  loadConfig,
+  findAvailablePort,
+  registerServer,
+  unregisterServer,
+  outputPortForDiscovery,
+} from "./port-manager.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
@@ -19,6 +26,13 @@ export {
   type ExternalBrowserOptions,
   type ExternalBrowserServer,
 } from "./external-browser.js";
+
+// Re-export port management utilities
+export {
+  loadConfig,
+  findAvailablePort,
+  type DevBrowserConfig,
+} from "./port-manager.js";
 
 export interface DevBrowserServer {
   wsEndpoint: string;
@@ -59,9 +73,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 }
 
 export async function serve(options: ServeOptions = {}): Promise<DevBrowserServer> {
-  const port = options.port ?? 9222;
+  const config = loadConfig();
+
+  // Use dynamic port allocation if port not specified
+  const port = options.port ?? await findAvailablePort(config);
   const headless = options.headless ?? false;
-  const cdpPort = options.cdpPort ?? 9223;
+  const cdpPort = options.cdpPort ?? config.cdpPort;
   const profileDir = options.profileDir;
 
   // Validate port numbers
@@ -196,6 +213,12 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     console.log(`HTTP API server running on port ${port}`);
   });
 
+  // Register this server for multi-agent coordination
+  registerServer(port, process.pid);
+
+  // Output port for agent discovery (agents parse this to know which port to connect to)
+  outputPortForDiscovery(port);
+
   // Track active connections for clean shutdown
   const connections = new Set<Socket>();
   server.on("connection", (socket: Socket) => {
@@ -237,7 +260,10 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
 
     server.close();
-    console.log("Server stopped.");
+
+    // Unregister this server
+    const remainingServers = unregisterServer(port);
+    console.log(`Server stopped. ${remainingServers} other server(s) still running.`);
   };
 
   // Synchronous cleanup for forced exits
