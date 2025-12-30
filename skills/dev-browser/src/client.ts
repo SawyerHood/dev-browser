@@ -240,6 +240,9 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
   let wsEndpoint: string | null = null;
   let connectingPromise: Promise<Browser> | null = null;
 
+  // Page registry for O(1) lookup by targetId - avoids expensive CDP session per page scan
+  const pageRegistry = new Map<string, Page>();
+
   async function ensureConnected(): Promise<Browser> {
     // Return existing connection if still active
     if (browser && browser.isConnected()) {
@@ -250,6 +253,9 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     if (connectingPromise) {
       return connectingPromise;
     }
+
+    // Clear page registry on reconnect - stale references won't work
+    pageRegistry.clear();
 
     // Start new connection with mutex
     connectingPromise = (async () => {
@@ -273,14 +279,30 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     return connectingPromise;
   }
 
-  // Find page by CDP targetId - more reliable than JS globals
+  // Find page by CDP targetId - uses O(1) registry lookup with fallback to CDP scan
   async function findPageByTargetId(b: Browser, targetId: string): Promise<Page | null> {
+    // Fast path: O(1) registry lookup
+    const cached = pageRegistry.get(targetId);
+    if (cached && !cached.isClosed()) {
+      return cached;
+    }
+
+    // Remove stale entry if page was closed
+    if (cached) {
+      pageRegistry.delete(targetId);
+    }
+
+    // Slow path: scan all pages via CDP (only needed on first access or after page close)
     for (const context of b.contexts()) {
       for (const page of context.pages()) {
         let cdpSession;
         try {
           cdpSession = await context.newCDPSession(page);
           const { targetInfo } = await cdpSession.send("Target.getTargetInfo");
+
+          // Cache this page for future O(1) lookups
+          pageRegistry.set(targetInfo.targetId, page);
+
           if (targetInfo.targetId === targetId) {
             return page;
           }
@@ -318,15 +340,13 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     }
 
     const pageInfo = (await res.json()) as GetPageResponse & { url?: string };
-    const { targetId } = pageInfo;
+    const { targetId, mode } = pageInfo;
 
     // Connect to browser
     const b = await ensureConnected();
 
-    // Check if we're in extension mode
-    const infoRes = await fetch(serverUrl);
-    const info = (await infoRes.json()) as { mode?: string };
-    const isExtensionMode = info.mode === "extension";
+    // Mode is now included in response - no extra HTTP request needed
+    const isExtensionMode = mode === "extension";
 
     if (isExtensionMode) {
       // In extension mode, DON'T use findPageByTargetId as it corrupts page state

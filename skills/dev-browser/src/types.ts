@@ -16,6 +16,7 @@ export interface GetPageResponse {
   wsEndpoint: string;
   name: string;
   targetId: string; // CDP target ID for reliable page matching
+  mode: "launch" | "extension"; // Server mode - eliminates need for separate GET /
 }
 
 export interface ListPagesResponse {

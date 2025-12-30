@@ -43,6 +43,12 @@ else
     echo "Dependencies up to date (skipping npm install)"
 fi
 
+# Build if dist doesn't exist (first run optimization)
+if [ ! -f "$SCRIPT_DIR/dist/start-server.js" ]; then
+    echo "Building TypeScript (first run)..."
+    npm run build
+fi
+
 # Get browser configuration from config file
 # Config is at ~/.dev-browser/config.json
 if [ "$FORCE_STANDALONE" = true ]; then
@@ -85,5 +91,11 @@ else
     echo ""
 
     export HEADLESS=$HEADLESS
-    npx tsx scripts/start-server.ts
+    # Use pre-compiled JS for faster startup (~700ms savings)
+    if [ -f "$SCRIPT_DIR/dist/start-server.js" ]; then
+        node "$SCRIPT_DIR/dist/start-server.js"
+    else
+        # Fallback to tsx if build failed
+        npx tsx scripts/start-server.ts
+    fi
 fi

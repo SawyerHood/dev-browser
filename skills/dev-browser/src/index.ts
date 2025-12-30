@@ -204,7 +204,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       });
     }
 
-    const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId };
+    const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId, mode: "launch" };
     res.json(response);
   });
 
