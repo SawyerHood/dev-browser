@@ -86,16 +86,16 @@ Execute scripts inline using heredocs:
 
 ```bash
 cd skills/dev-browser && npx tsx <<'EOF'
-import { connect, waitForPageLoad } from "@/client.js";
+import { connectLite } from "@/client-lite.js";
 
-const client = await connect();
-const page = await client.page("example"); // descriptive name like "cnn-homepage"
-await page.setViewportSize({ width: 1280, height: 800 });
+const client = await connectLite();
+await client.page("example"); // descriptive name like "cnn-homepage"
+await client.setViewportSize("example", 1280, 800);
 
-await page.goto("https://example.com");
-await waitForPageLoad(page);
+await client.navigate("example", "https://example.com");
 
-console.log({ title: await page.title(), url: page.url() });
+const info = await client.getInfo("example");
+console.log({ title: info.title, url: info.url });
 await client.disconnect();
 EOF
 ```
@@ -108,7 +108,7 @@ EOF
 2. **Evaluate state**: Log/return state at the end to decide next steps
 3. **Descriptive page names**: Use `"checkout"`, `"login"`, not `"main"`
 4. **Disconnect to exit**: `await client.disconnect()` - pages persist on server
-5. **Plain JS in evaluate**: `page.evaluate()` runs in browser - no TypeScript syntax
+5. **Plain JS in evaluate**: `client.evaluate()` runs in browser - no TypeScript syntax
 
 ## Workflow Loop
 
@@ -122,19 +122,19 @@ Follow this pattern for complex tasks:
 
 ### No TypeScript in Browser Context
 
-Code passed to `page.evaluate()` runs in the browser, which doesn't understand TypeScript:
+Code passed to `client.evaluate()` runs in the browser, which doesn't understand TypeScript:
 
 ```typescript
 // ✅ Correct: plain JavaScript
-const text = await page.evaluate(() => {
-  return document.body.innerText;
-});
+const text = await client.evaluate("mypage", `
+  document.body.innerText
+`);
 
 // ❌ Wrong: TypeScript syntax will fail at runtime
-const text = await page.evaluate(() => {
+const text = await client.evaluate("mypage", `
   const el: HTMLElement = document.body; // Type annotation breaks in browser!
-  return el.innerText;
-});
+  el.innerText;
+`);
 ```
 
 ## Scraping Data
@@ -144,27 +144,30 @@ For scraping large datasets, intercept and replay network requests rather than s
 ## Client API
 
 ```typescript
-const client = await connect();
-const page = await client.page("name"); // Get or create named page
-const pages = await client.list(); // List all page names
-await client.close("name"); // Close a page
-await client.disconnect(); // Disconnect (pages persist)
+import { connectLite } from "@/client-lite.js";
+
+const client = await connectLite();
+await client.page("name");              // Get or create named page
+const pages = await client.list();      // List all page names
+await client.close("name");             // Close a page
+await client.disconnect();              // Disconnect (pages persist)
 
 // ARIA Snapshot methods
-const snapshot = await client.getAISnapshot("name"); // Get accessibility tree
-const element = await client.selectSnapshotRef("name", "e5"); // Get element by ref
+const snapshot = await client.getAISnapshot("name");    // Get accessibility tree
+const refInfo = await client.selectRef("name", "e5");   // Get element info by ref
+await client.click("name", "e5");                       // Click element by ref
+await client.fill("name", "e5", "text");                // Fill input by ref
 ```
-
-The `page` object is a standard Playwright Page.
 
 ## Waiting
 
 ```typescript
-import { waitForPageLoad } from "@/client.js";
+// After navigation
+await client.navigate("name", "https://example.com", "networkidle");
 
-await waitForPageLoad(page); // After navigation
-await page.waitForSelector(".results"); // For specific elements
-await page.waitForURL("**/success"); // For specific URL
+// For specific elements
+await client.waitForSelector("name", ".results");
+await client.waitForSelector("name", ".modal", { state: "hidden", timeout: 5000 });
 ```
 
 ## Inspecting Page State
@@ -172,8 +175,13 @@ await page.waitForURL("**/success"); // For specific URL
 ### Screenshots
 
 ```typescript
-await page.screenshot({ path: "tmp/screenshot.png" });
-await page.screenshot({ path: "tmp/full.png", fullPage: true });
+import { writeFileSync } from "fs";
+
+const result = await client.screenshot("name");
+writeFileSync("tmp/screenshot.png", Buffer.from(result.screenshot, "base64"));
+
+const full = await client.screenshot("name", { fullPage: true });
+writeFileSync("tmp/full.png", Buffer.from(full.screenshot, "base64"));
 ```
 
 ### ARIA Snapshot (Element Discovery)
@@ -208,8 +216,13 @@ Use `getAISnapshot()` to discover page elements. Returns YAML-formatted accessib
 const snapshot = await client.getAISnapshot("hackernews");
 console.log(snapshot); // Find the ref you need
 
-const element = await client.selectSnapshotRef("hackernews", "e2");
-await element.click();
+// Get info about an element
+const refInfo = await client.selectRef("hackernews", "e2");
+console.log(refInfo); // { found: true, tagName: "A", textContent: "..." }
+
+// Click or fill
+await client.click("hackernews", "e2");
+await client.fill("hackernews", "e10", "search query");
 ```
 
 ## Error Recovery
@@ -218,16 +231,22 @@ Page state persists after failures. Debug with:
 
 ```bash
 cd skills/dev-browser && npx tsx <<'EOF'
-import { connect } from "@/client.js";
+import { connectLite } from "@/client-lite.js";
+import { writeFileSync } from "fs";
 
-const client = await connect();
-const page = await client.page("hackernews");
+const client = await connectLite();
+await client.page("hackernews");
 
-await page.screenshot({ path: "tmp/debug.png" });
+const shot = await client.screenshot("hackernews");
+writeFileSync("tmp/debug.png", Buffer.from(shot.screenshot, "base64"));
+
+const info = await client.getInfo("hackernews");
+const bodyText = await client.evaluate("hackernews", "document.body.innerText.slice(0, 200)");
+
 console.log({
-  url: page.url(),
-  title: await page.title(),
-  bodyText: await page.textContent("body").then((t) => t?.slice(0, 200)),
+  url: info.url,
+  title: info.title,
+  bodyText,
 });
 
 await client.disconnect();

@@ -64,3 +64,45 @@ export interface SelectRefResponse {
   textContent?: string;
   error?: string;
 }
+
+// Phase 3: Additional HTTP endpoints for full client-lite support
+
+export interface ScreenshotRequest {
+  fullPage?: boolean;
+  selector?: string;
+}
+
+export interface ScreenshotResponse {
+  screenshot: string; // base64 encoded PNG
+  mimeType: "image/png";
+  error?: string;
+}
+
+export interface SetViewportRequest {
+  width: number;
+  height: number;
+}
+
+export interface SetViewportResponse {
+  success: boolean;
+  width: number;
+  height: number;
+  error?: string;
+}
+
+export interface WaitForSelectorRequest {
+  selector: string;
+  timeout?: number;
+  state?: "attached" | "detached" | "visible" | "hidden";
+}
+
+export interface WaitForSelectorResponse {
+  success: boolean;
+  error?: string;
+}
+
+export interface PageInfoResponse {
+  url: string;
+  title: string;
+  error?: string;
+}

@@ -9,13 +9,8 @@ import type {
   GetPageResponse,
   ListPagesResponse,
   ServerInfoResponse,
-  EvaluateRequest,
-  EvaluateResponse,
-  SnapshotResponse,
-  NavigateRequest,
-  NavigateResponse,
 } from "./types";
-import { getSnapshotScript } from "./snapshot/browser-script.js";
+import { registerPageRoutes, type PageEntry } from "./http-routes.js";
 import {
   loadConfig,
   findAvailablePort,
@@ -137,12 +132,6 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   const wsEndpoint = cdpInfo.webSocketDebuggerUrl;
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
 
-  // Registry entry type for page tracking
-  interface PageEntry {
-    page: Page;
-    targetId: string;
-  }
-
   // Registry: name -> PageEntry
   const registry = new Map<string, PageEntry>();
 
@@ -229,210 +218,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     res.status(404).json({ error: "page not found" });
   });
 
-  // POST /pages/:name/navigate - navigate to URL
-  app.post("/pages/:name/navigate", async (req: Request<{ name: string }>, res: Response) => {
-    const name = decodeURIComponent(req.params.name);
-    const entry = registry.get(name);
-
-    if (!entry) {
-      res.status(404).json({ error: "page not found" });
-      return;
-    }
-
-    const { url, waitUntil } = req.body as { url?: string; waitUntil?: "load" | "domcontentloaded" | "networkidle" };
-    if (!url) {
-      res.status(400).json({ error: "url is required" });
-      return;
-    }
-
-    try {
-      await entry.page.goto(url, { waitUntil: waitUntil || "domcontentloaded" });
-      res.json({
-        url: entry.page.url(),
-        title: await entry.page.title(),
-      });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  // POST /pages/:name/evaluate - evaluate JavaScript
-  app.post("/pages/:name/evaluate", async (req: Request<{ name: string }>, res: Response) => {
-    const name = decodeURIComponent(req.params.name);
-    const entry = registry.get(name);
-
-    if (!entry) {
-      res.status(404).json({ error: "page not found" });
-      return;
-    }
-
-    const { expression } = req.body as { expression?: string };
-    if (!expression) {
-      res.status(400).json({ error: "expression is required" });
-      return;
-    }
-
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await entry.page.evaluate((expr: string) => eval(expr), expression);
-      res.json({ result });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  // GET /pages/:name/snapshot - get AI snapshot
-  app.get("/pages/:name/snapshot", async (req: Request<{ name: string }>, res: Response) => {
-    const name = decodeURIComponent(req.params.name);
-    const entry = registry.get(name);
-
-    if (!entry) {
-      res.status(404).json({ error: "page not found" });
-      return;
-    }
-
-    try {
-      const snapshotScript = getSnapshotScript();
-      const snapshot = await entry.page.evaluate((script: string) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const w = globalThis as any;
-        if (!w.__devBrowser_getAISnapshot) {
-          // eslint-disable-next-line no-eval
-          eval(script);
-        }
-        return w.__devBrowser_getAISnapshot();
-      }, snapshotScript);
-
-      res.json({ snapshot });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  // POST /pages/:name/select-ref - get element info by ref
-  app.post("/pages/:name/select-ref", async (req: Request<{ name: string }>, res: Response) => {
-    const name = decodeURIComponent(req.params.name);
-    const entry = registry.get(name);
-
-    if (!entry) {
-      res.status(404).json({ error: "page not found" });
-      return;
-    }
-
-    const { ref } = req.body as { ref?: string };
-    if (!ref) {
-      res.status(400).json({ error: "ref is required" });
-      return;
-    }
-
-    try {
-      const elementInfo = await entry.page.evaluate((refId: string) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const w = globalThis as any;
-        const refs = w.__devBrowserRefs;
-        if (!refs) {
-          throw new Error("No snapshot refs found. Call snapshot first.");
-        }
-        const element = refs[refId];
-        if (!element) {
-          return { found: false };
-        }
-        return {
-          found: true,
-          tagName: element.tagName,
-          textContent: element.textContent?.slice(0, 500),
-        };
-      }, ref);
-
-      res.json(elementInfo);
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  // POST /pages/:name/click - click on element by ref
-  app.post("/pages/:name/click", async (req: Request<{ name: string }>, res: Response) => {
-    const name = decodeURIComponent(req.params.name);
-    const entry = registry.get(name);
-
-    if (!entry) {
-      res.status(404).json({ error: "page not found" });
-      return;
-    }
-
-    const { ref } = req.body as { ref?: string };
-    if (!ref) {
-      res.status(400).json({ error: "ref is required" });
-      return;
-    }
-
-    try {
-      const elementHandle = await entry.page.evaluateHandle((refId: string) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const w = globalThis as any;
-        const refs = w.__devBrowserRefs;
-        if (!refs) throw new Error("No snapshot refs found. Call snapshot first.");
-        const element = refs[refId];
-        if (!element) throw new Error(`Ref "${refId}" not found`);
-        return element;
-      }, ref);
-
-      const element = elementHandle.asElement();
-      if (!element) {
-        res.status(400).json({ error: "Could not get element handle" });
-        return;
-      }
-
-      await element.click();
-      res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  // POST /pages/:name/fill - fill input by ref
-  app.post("/pages/:name/fill", async (req: Request<{ name: string }>, res: Response) => {
-    const name = decodeURIComponent(req.params.name);
-    const entry = registry.get(name);
-
-    if (!entry) {
-      res.status(404).json({ error: "page not found" });
-      return;
-    }
-
-    const { ref, value } = req.body as { ref?: string; value?: string };
-    if (!ref) {
-      res.status(400).json({ error: "ref is required" });
-      return;
-    }
-    if (value === undefined) {
-      res.status(400).json({ error: "value is required" });
-      return;
-    }
-
-    try {
-      const elementHandle = await entry.page.evaluateHandle((refId: string) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const w = globalThis as any;
-        const refs = w.__devBrowserRefs;
-        if (!refs) throw new Error("No snapshot refs found. Call snapshot first.");
-        const element = refs[refId];
-        if (!element) throw new Error(`Ref "${refId}" not found`);
-        return element;
-      }, ref);
-
-      const element = elementHandle.asElement();
-      if (!element) {
-        res.status(400).json({ error: "Could not get element handle" });
-        return;
-      }
-
-      await element.fill(value);
-      res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+  // Register shared page operation routes (navigate, evaluate, snapshot, click, fill, etc.)
+  registerPageRoutes(app, registry);
 
   // Start the server
   const server = app.listen(port, () => {

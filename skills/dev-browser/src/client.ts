@@ -1,3 +1,21 @@
+/**
+ * @deprecated Use client-lite.ts instead for HTTP-only client without Playwright dependency.
+ *
+ * This client requires Playwright on the client side (~12MB+ memory overhead per agent).
+ * The new client-lite.ts uses pure HTTP and has only 30KB memory overhead.
+ *
+ * Migration guide:
+ * - Replace: import { connect } from "@/client.js"
+ * - With:    import { connectLite } from "@/client-lite.js"
+ * - Replace: const page = await client.page("name")
+ * - With:    await client.page("name") // returns { name, targetId }, not a Playwright Page
+ * - Replace: await page.goto(url)
+ * - With:    await client.navigate("name", url)
+ * - Replace: await page.screenshot({ path })
+ * - With:    const { screenshot } = await client.screenshot("name")
+ *
+ * See SKILL.md for full client-lite API documentation.
+ */
 import { chromium, type Browser, type Page, type ElementHandle } from "playwright";
 import type {
   GetPageRequest,

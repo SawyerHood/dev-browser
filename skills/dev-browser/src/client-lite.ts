@@ -22,6 +22,10 @@ import type {
   SnapshotResponse,
   NavigateResponse,
   SelectRefResponse,
+  ScreenshotResponse,
+  SetViewportResponse,
+  WaitForSelectorResponse,
+  PageInfoResponse,
 } from "./types";
 
 /** Server mode information */
@@ -61,6 +65,18 @@ export interface DevBrowserLiteClient {
 
   /** Fill input by ref */
   fill: (name: string, ref: string, value: string) => Promise<void>;
+
+  /** Take screenshot of page or element */
+  screenshot: (name: string, options?: { fullPage?: boolean; selector?: string }) => Promise<{ screenshot: string; mimeType: string }>;
+
+  /** Set viewport size */
+  setViewportSize: (name: string, width: number, height: number) => Promise<void>;
+
+  /** Wait for selector to appear */
+  waitForSelector: (name: string, selector: string, options?: { timeout?: number; state?: "attached" | "detached" | "visible" | "hidden" }) => Promise<void>;
+
+  /** Get page URL and title */
+  getInfo: (name: string) => Promise<{ url: string; title: string }>;
 
   /** Get server information */
   getServerInfo: () => Promise<ServerInfo>;
@@ -163,6 +179,45 @@ export async function connectLite(serverUrl = "http://localhost:9222"): Promise<
       if (result.error) {
         throw new Error(result.error);
       }
+    },
+
+    async screenshot(name: string, options?: { fullPage?: boolean; selector?: string }) {
+      const result = await jsonRequest<ScreenshotResponse>(`/pages/${encodeURIComponent(name)}/screenshot`, {
+        method: "POST",
+        body: JSON.stringify(options ?? {}),
+      });
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      return { screenshot: result.screenshot, mimeType: result.mimeType };
+    },
+
+    async setViewportSize(name: string, width: number, height: number) {
+      const result = await jsonRequest<SetViewportResponse>(`/pages/${encodeURIComponent(name)}/set-viewport`, {
+        method: "POST",
+        body: JSON.stringify({ width, height }),
+      });
+      if (result.error) {
+        throw new Error(result.error);
+      }
+    },
+
+    async waitForSelector(name: string, selector: string, options?: { timeout?: number; state?: "attached" | "detached" | "visible" | "hidden" }) {
+      const result = await jsonRequest<WaitForSelectorResponse>(`/pages/${encodeURIComponent(name)}/wait-for-selector`, {
+        method: "POST",
+        body: JSON.stringify({ selector, ...options }),
+      });
+      if (result.error) {
+        throw new Error(result.error);
+      }
+    },
+
+    async getInfo(name: string) {
+      const result = await jsonRequest<PageInfoResponse>(`/pages/${encodeURIComponent(name)}/info`);
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      return { url: result.url, title: result.title };
     },
 
     async getServerInfo() {
