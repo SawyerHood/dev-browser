@@ -100,14 +100,22 @@ try {
 
 console.log("Starting dev browser server...");
 const headless = process.env.HEADLESS === "true";
+const host = process.env.HOST ?? "localhost";
+const lazy = process.env.LAZY === "true";
 const server = await serve({
   port: 9222,
+  host,
   headless,
+  lazy,
   profileDir,
 });
 
 console.log(`Dev browser server started`);
-console.log(`  WebSocket: ${server.wsEndpoint}`);
+if (lazy) {
+  console.log(`  Mode: lazy (browser launches on first request)`);
+} else {
+  console.log(`  WebSocket: ${server.wsEndpoint}`);
+}
 console.log(`  Tmp directory: ${tmpDir}`);
 console.log(`  Profile directory: ${profileDir}`);
 console.log(`\nReady`);
