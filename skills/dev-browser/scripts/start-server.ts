@@ -1,3 +1,31 @@
+/**
+ * Start dev-browser server in standalone mode (launches Playwright Chromium).
+ *
+ * This mode:
+ * - Launches a dedicated Playwright Chromium browser
+ * - Owns the browser lifecycle (closes when server stops)
+ * - Supports multiple concurrent agents via dynamic port allocation
+ *
+ * Environment variables:
+ *   PORT     - HTTP API port (default: auto-assigned from 9222-9300)
+ *   HEADLESS - Run browser in headless mode (default: false)
+ *
+ * Configuration file: ~/.dev-browser/config.json
+ *   {
+ *     "portRange": { "start": 9222, "end": 9300, "step": 2 },
+ *     "cdpPort": 9223
+ *   }
+ *
+ * Multi-agent usage:
+ *   # Terminal 1: First agent gets port 9222, launches browser
+ *   npx tsx scripts/start-server.ts
+ *   # Output: PORT=9222
+ *
+ *   # Terminal 2: Second agent gets port 9224, launches separate browser
+ *   npx tsx scripts/start-server.ts
+ *   # Output: PORT=9224
+ */
+
 import { serve } from "@/index.js";
 import { execSync } from "child_process";
 import { mkdirSync, existsSync, readdirSync } from "fs";
@@ -9,9 +37,7 @@ const tmpDir = join(__dirname, "..", "tmp");
 const profileDir = join(__dirname, "..", "profiles");
 
 // Create tmp and profile directories if they don't exist
-console.log("Creating tmp directory...");
 mkdirSync(tmpDir, { recursive: true });
-console.log("Creating profiles directory...");
 mkdirSync(profileDir, { recursive: true });
 
 // Install Playwright browsers if not already installed
@@ -72,46 +98,33 @@ try {
   console.log("You may need to run: npx playwright install chromium");
 }
 
-// Check if server is already running
-console.log("Checking for existing servers...");
-try {
-  const res = await fetch("http://localhost:9222", {
-    signal: AbortSignal.timeout(1000),
-  });
-  if (res.ok) {
-    console.log("Server already running on port 9222");
-    process.exit(0);
-  }
-} catch {
-  // Server not running, continue to start
-}
-
-// Clean up stale CDP port if HTTP server isn't running (crash recovery)
-// This handles the case where Node crashed but Chrome is still running on 9223
-try {
-  const pid = execSync("lsof -ti:9223", { encoding: "utf-8" }).trim();
-  if (pid) {
-    console.log(`Cleaning up stale Chrome process on CDP port 9223 (PID: ${pid})`);
-    execSync(`kill -9 ${pid}`);
-  }
-} catch {
-  // No process on CDP port, which is expected
-}
-
-console.log("Starting dev browser server...");
+// Configuration from environment (PORT is optional - will be auto-assigned)
+const port = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
 const headless = process.env.HEADLESS === "true";
+
+console.log("");
+console.log("Starting dev browser server (standalone mode)...");
+console.log(`  HTTP API port: ${port ?? "auto (dynamic)"}`);
+console.log(`  Headless: ${headless}`);
+console.log(`  Config: ~/.dev-browser/config.json`);
+console.log("");
+
 const server = await serve({
-  port: 9222,
+  port,
   headless,
   profileDir,
 });
 
+console.log("");
 console.log(`Dev browser server started`);
 console.log(`  WebSocket: ${server.wsEndpoint}`);
+console.log(`  HTTP API: http://localhost:${server.port}`);
 console.log(`  Tmp directory: ${tmpDir}`);
 console.log(`  Profile directory: ${profileDir}`);
-console.log(`\nReady`);
-console.log(`\nPress Ctrl+C to stop`);
+console.log("");
+console.log("Ready");
+console.log("");
+console.log("Press Ctrl+C to stop");
 
 // Keep the process running
 await new Promise(() => {});

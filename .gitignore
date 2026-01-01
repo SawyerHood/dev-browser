@@ -35,6 +35,10 @@ coverage/
 # Temporary files
 tmp/
 temp/
+.npm-install-hash
+
+# npm install optimization cache
+.npm-install-hash
 
 # Browser profiles
 profiles/

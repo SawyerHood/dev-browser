@@ -1,0 +1,582 @@
+/**
+ * Port management for multi-agent concurrency support.
+ *
+ * When multiple Claude Code agents (or other automation tools) run dev-browser
+ * concurrently, each needs its own HTTP API server port while potentially
+ * sharing the same browser instance.
+ *
+ * This module provides:
+ * - Dynamic port allocation to avoid conflicts
+ * - Server tracking for coordination
+ * - Orphaned browser detection and cleanup (crash recovery)
+ * - Config file support for preferences
+ * - PORT=XXXX output for agent discovery
+ *
+ * @see https://github.com/SawyerHood/dev-browser/pull/15#issuecomment-3698722432
+ */
+
+import { createServer } from "net";
+import { execSync } from "child_process";
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
+import { join } from "path";
+
+/**
+ * Browser mode selection.
+ * - "auto": Detect Chrome for Testing, fall back to standalone (default)
+ * - "external": Always use external browser via CDP (fail if not found)
+ * - "standalone": Always use Playwright's built-in Chromium
+ */
+export type BrowserMode = "auto" | "external" | "standalone";
+
+/**
+ * Browser configuration for dev-browser.
+ */
+export interface BrowserConfig {
+  /**
+   * Browser mode selection (default: "auto")
+   * - "auto": Detect Chrome for Testing, fall back to standalone
+   * - "external": Always use external browser via CDP
+   * - "standalone": Always use Playwright's built-in Chromium
+   */
+  mode: BrowserMode;
+  /**
+   * Path to browser executable for external mode.
+   * If not set, uses platform-specific defaults:
+   * - macOS: /Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
+   * - Linux: /opt/google/chrome-for-testing/chrome or google-chrome-for-testing
+   * - Windows: C:\Program Files\Google\Chrome for Testing\Application\chrome.exe
+   */
+  path?: string;
+  /**
+   * User data directory for browser profile.
+   * Default: ~/.dev-browser-profile
+   */
+  userDataDir?: string;
+}
+
+/**
+ * Configuration for dev-browser multi-agent support.
+ */
+export interface DevBrowserConfig {
+  /**
+   * Port range for HTTP API servers.
+   * Each concurrent agent gets a port from this range.
+   */
+  portRange: {
+    /** First port to try (default: 9222) */
+    start: number;
+    /** Last port to try (default: 9300) */
+    end: number;
+    /** Port increment - use 2 to avoid CDP port collision (default: 2) */
+    step: number;
+  };
+  /** CDP port for external browser mode (default: 9223) */
+  cdpPort: number;
+  /** Browser configuration */
+  browser: BrowserConfig;
+}
+
+/**
+ * Information about a registered server.
+ */
+export interface ServerInfo {
+  /** Process ID of the server */
+  pid: number;
+  /** CDP port the server's browser is using (for orphan detection) */
+  cdpPort?: number;
+  /** Browser process ID (for standalone mode cleanup) */
+  browserPid?: number;
+  /** Server mode: 'standalone' owns browser, 'external' connects to shared browser */
+  mode: "standalone" | "external";
+  /** Timestamp when server was registered */
+  startedAt: string;
+}
+
+const CONFIG_DIR = join(process.env.HOME || "", ".dev-browser");
+const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+const SERVERS_FILE = join(CONFIG_DIR, "active-servers.json");
+
+/**
+ * Get platform-specific default browser path for Chrome for Testing.
+ */
+function getDefaultBrowserPath(): string | undefined {
+  const platform = process.platform;
+
+  if (platform === "darwin") {
+    // macOS: Check standard installation path
+    const macPath = "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+    if (existsSync(macPath)) {
+      return macPath;
+    }
+  } else if (platform === "linux") {
+    // Linux: Check common installation paths
+    const linuxPaths = [
+      "/opt/google/chrome-for-testing/chrome",
+      "/usr/bin/google-chrome-for-testing",
+      "/usr/local/bin/chrome-for-testing",
+    ];
+    for (const path of linuxPaths) {
+      if (existsSync(path)) {
+        return path;
+      }
+    }
+  } else if (platform === "win32") {
+    // Windows: Check standard installation path
+    const winPath = "C:\\Program Files\\Google\\Chrome for Testing\\Application\\chrome.exe";
+    if (existsSync(winPath)) {
+      return winPath;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Default configuration values.
+ */
+const DEFAULT_CONFIG: DevBrowserConfig = {
+  portRange: {
+    start: 19222, // High port range to avoid Chrome CDP port conflicts (9222-9223)
+    end: 19300,
+    step: 2, // Skip odd ports to avoid CDP port collision
+  },
+  cdpPort: 9223,
+  browser: {
+    mode: "auto",
+    // userDataDir intentionally not set - let browser use its default profile
+    // unless user explicitly configures it in ~/.dev-browser/config.json
+  },
+};
+
+/**
+ * Load configuration from ~/.dev-browser/config.json with defaults.
+ * Merges user config with defaults and resolves platform-specific browser paths.
+ */
+export function loadConfig(): DevBrowserConfig {
+  let config = { ...DEFAULT_CONFIG };
+
+  try {
+    if (existsSync(CONFIG_FILE)) {
+      const content = readFileSync(CONFIG_FILE, "utf-8");
+      const userConfig = JSON.parse(content);
+      config = {
+        ...DEFAULT_CONFIG,
+        ...userConfig,
+        portRange: {
+          ...DEFAULT_CONFIG.portRange,
+          ...(userConfig.portRange || {}),
+        },
+        browser: {
+          ...DEFAULT_CONFIG.browser,
+          ...(userConfig.browser || {}),
+        },
+      };
+    }
+  } catch (err) {
+    console.warn(`Warning: Could not load config from ${CONFIG_FILE}:`, err);
+  }
+
+  // Resolve browser path: user config > auto-detection > undefined
+  if (!config.browser.path) {
+    config.browser.path = getDefaultBrowserPath();
+  }
+
+  return config;
+}
+
+/**
+ * Get resolved browser configuration for use by server scripts.
+ * Returns the effective browser mode and path based on config and detection.
+ */
+export function getResolvedBrowserConfig(): {
+  mode: "external" | "standalone";
+  path?: string;
+  userDataDir?: string;
+} {
+  const config = loadConfig();
+  const { browser } = config;
+
+  // Determine effective mode
+  let effectiveMode: "external" | "standalone";
+
+  if (browser.mode === "standalone") {
+    effectiveMode = "standalone";
+  } else if (browser.mode === "external") {
+    if (!browser.path) {
+      throw new Error(
+        `Browser mode is "external" but no browser path configured or detected. ` +
+        `Set browser.path in ~/.dev-browser/config.json or install Chrome for Testing.`
+      );
+    }
+    effectiveMode = "external";
+  } else {
+    // "auto" mode: use external if browser found, otherwise standalone
+    effectiveMode = browser.path ? "external" : "standalone";
+  }
+
+  return {
+    mode: effectiveMode,
+    path: browser.path,
+    // Only include userDataDir if explicitly configured by user
+    // For external mode, let the browser use its default profile unless specified
+    userDataDir: browser.userDataDir,
+  };
+}
+
+/**
+ * Check if a port is available by attempting to bind to it.
+ * Checks both IPv4 and IPv6 to match Express's default binding behavior.
+ */
+export async function isPortAvailable(port: number): Promise<boolean> {
+  // Check default binding (IPv6 on most systems, which Express uses)
+  const defaultAvailable = await new Promise<boolean>((resolve) => {
+    const server = createServer();
+    server.once("error", () => resolve(false));
+    server.once("listening", () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port);
+  });
+
+  if (!defaultAvailable) return false;
+
+  // Also check IPv4 for completeness
+  const ipv4Available = await new Promise<boolean>((resolve) => {
+    const server = createServer();
+    server.once("error", () => resolve(false));
+    server.once("listening", () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, "0.0.0.0");
+  });
+
+  return ipv4Available;
+}
+
+/**
+ * Find an available port in the configured range.
+ * @throws Error if no ports are available
+ */
+export async function findAvailablePort(config?: DevBrowserConfig): Promise<number> {
+  const { portRange } = config || loadConfig();
+  const { start, end, step } = portRange;
+
+  for (let port = start; port < end; port += step) {
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+
+  throw new Error(
+    `No available ports in range ${start}-${end} (step ${step}). ` +
+    `Too many dev-browser servers may be running. ` +
+    `Check ~/.dev-browser/active-servers.json for active servers.`
+  );
+}
+
+/**
+ * Check if a process exists.
+ */
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Load the servers file, handling both old format (pid only) and new format (ServerInfo).
+ */
+function loadServersFile(): Record<string, ServerInfo> {
+  if (!existsSync(SERVERS_FILE)) {
+    return {};
+  }
+
+  try {
+    const content = readFileSync(SERVERS_FILE, "utf-8");
+    const data = JSON.parse(content);
+
+    // Handle migration from old format { port: pid } to new format { port: ServerInfo }
+    const servers: Record<string, ServerInfo> = {};
+    for (const [port, value] of Object.entries(data)) {
+      if (typeof value === "number") {
+        // Old format: migrate to new format
+        servers[port] = {
+          pid: value,
+          mode: "standalone", // Assume standalone for old entries
+          startedAt: new Date().toISOString(),
+        };
+      } else {
+        // New format
+        servers[port] = value as ServerInfo;
+      }
+    }
+    return servers;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Save the servers file.
+ */
+function saveServersFile(servers: Record<string, ServerInfo>): void {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(SERVERS_FILE, JSON.stringify(servers, null, 2));
+}
+
+/**
+ * Clean up stale entries from servers file (processes that no longer exist).
+ */
+function cleanupStaleEntries(servers: Record<string, ServerInfo>): Record<string, ServerInfo> {
+  const cleaned: Record<string, ServerInfo> = {};
+  for (const [port, info] of Object.entries(servers)) {
+    if (processExists(info.pid)) {
+      cleaned[port] = info;
+    }
+  }
+  return cleaned;
+}
+
+/**
+ * Register a server for coordination tracking.
+ * This helps coordinate shutdown behavior and orphan detection.
+ */
+export function registerServer(
+  port: number,
+  pid: number,
+  options?: {
+    cdpPort?: number;
+    browserPid?: number;
+    mode?: "standalone" | "external";
+  }
+): void {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+
+  let servers = loadServersFile();
+  servers = cleanupStaleEntries(servers);
+
+  servers[port.toString()] = {
+    pid,
+    cdpPort: options?.cdpPort,
+    browserPid: options?.browserPid,
+    mode: options?.mode ?? "standalone",
+    startedAt: new Date().toISOString(),
+  };
+
+  saveServersFile(servers);
+}
+
+/**
+ * Unregister a server and return the count of remaining servers.
+ */
+export function unregisterServer(port: number): number {
+  let servers = loadServersFile();
+  delete servers[port.toString()];
+  servers = cleanupStaleEntries(servers);
+  saveServersFile(servers);
+  return Object.keys(servers).length;
+}
+
+/**
+ * Get the count of currently active servers.
+ */
+export function getActiveServerCount(): number {
+  const servers = loadServersFile();
+  const cleaned = cleanupStaleEntries(servers);
+  return Object.keys(cleaned).length;
+}
+
+/**
+ * Get process ID listening on a specific port (macOS/Linux).
+ * Returns null if no process is listening or on error.
+ */
+function getProcessOnPort(port: number): number | null {
+  try {
+    // Works on macOS and Linux
+    const output = execSync(`lsof -ti:${port}`, {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+
+    if (output) {
+      // May return multiple PIDs, take the first one
+      const firstLine = output.split("\n")[0] ?? "";
+      const pid = parseInt(firstLine, 10);
+      return isNaN(pid) ? null : pid;
+    }
+  } catch {
+    // No process on port or lsof not available
+  }
+  return null;
+}
+
+/**
+ * Information about an orphaned browser.
+ */
+export interface OrphanedBrowser {
+  cdpPort: number;
+  pid: number;
+}
+
+/**
+ * Detect orphaned browsers - browsers running on CDP ports with no registered server.
+ *
+ * This handles crash recovery: if a server crashed without cleanup, its browser
+ * may still be running. This function identifies such orphans.
+ *
+ * @param cdpPorts - CDP ports to check (default: common ports 9223, 9225, etc.)
+ * @returns List of orphaned browsers
+ */
+export function detectOrphanedBrowsers(cdpPorts?: number[]): OrphanedBrowser[] {
+  const servers = loadServersFile();
+  const cleanedServers = cleanupStaleEntries(servers);
+
+  // Get CDP ports that have active servers
+  const activeCdpPorts = new Set<number>();
+  for (const info of Object.values(cleanedServers)) {
+    if (info.cdpPort) {
+      activeCdpPorts.add(info.cdpPort);
+    }
+  }
+
+  // Default ports to check if not specified
+  const portsToCheck = cdpPorts ?? [9223, 9225, 9227, 9229, 9231];
+
+  const orphans: OrphanedBrowser[] = [];
+  for (const cdpPort of portsToCheck) {
+    // Skip if an active server claims this CDP port
+    if (activeCdpPorts.has(cdpPort)) {
+      continue;
+    }
+
+    // Check if something is running on this port
+    const pid = getProcessOnPort(cdpPort);
+    if (pid !== null) {
+      orphans.push({ cdpPort, pid });
+    }
+  }
+
+  return orphans;
+}
+
+/**
+ * Clean up orphaned browsers from previous crashed sessions.
+ *
+ * This is useful for standalone mode where the server owns the browser lifecycle.
+ * Only kills processes that are truly orphaned (no registered server).
+ *
+ * @param cdpPorts - CDP ports to check for orphans
+ * @returns Number of orphaned browsers cleaned up
+ */
+export function cleanupOrphanedBrowsers(cdpPorts?: number[]): number {
+  const orphans = detectOrphanedBrowsers(cdpPorts);
+  let cleaned = 0;
+
+  for (const orphan of orphans) {
+    try {
+      console.log(
+        `Cleaning up orphaned browser on CDP port ${orphan.cdpPort} (PID: ${orphan.pid})`
+      );
+      process.kill(orphan.pid, "SIGTERM");
+      cleaned++;
+    } catch (err) {
+      console.warn(
+        `Warning: Could not kill orphaned process ${orphan.pid}: ${err}`
+      );
+    }
+  }
+
+  return cleaned;
+}
+
+/**
+ * Output the assigned port for agent discovery.
+ * Agents parse this output to know which port to connect to.
+ *
+ * Format: PORT=XXXX
+ */
+export function outputPortForDiscovery(port: number): void {
+  console.log(`PORT=${port}`);
+}
+
+/**
+ * Write port to tmp/port file for client discovery.
+ * The client-lite can read this file to find the server port.
+ */
+export function writePortFile(port: number, skillDir: string): void {
+  const portFile = join(skillDir, "tmp", "port");
+  mkdirSync(join(skillDir, "tmp"), { recursive: true });
+  writeFileSync(portFile, port.toString());
+}
+
+/**
+ * Read port from tmp/port file.
+ * Returns null if file doesn't exist or is invalid.
+ */
+export function readPortFile(skillDir: string): number | null {
+  const portFile = join(skillDir, "tmp", "port");
+  try {
+    if (existsSync(portFile)) {
+      const content = readFileSync(portFile, "utf-8").trim();
+      const port = parseInt(content, 10);
+      return isNaN(port) ? null : port;
+    }
+  } catch {
+    // File doesn't exist or can't be read
+  }
+  return null;
+}
+
+/**
+ * Get the most recently started server from active-servers.json.
+ * Returns null if no servers are running.
+ */
+export function getMostRecentServer(): { port: number; info: ServerInfo } | null {
+  const servers = loadServersFile();
+  const cleaned = cleanupStaleEntries(servers);
+
+  // Save cleaned version back
+  if (Object.keys(servers).length !== Object.keys(cleaned).length) {
+    saveServersFile(cleaned);
+  }
+
+  let mostRecent: { port: number; info: ServerInfo } | null = null;
+  let mostRecentTime = 0;
+
+  for (const [portStr, info] of Object.entries(cleaned)) {
+    const startedAt = new Date(info.startedAt).getTime();
+    if (startedAt > mostRecentTime) {
+      mostRecentTime = startedAt;
+      mostRecent = { port: parseInt(portStr, 10), info };
+    }
+  }
+
+  return mostRecent;
+}
+
+/**
+ * Kill all stale servers (processes that no longer exist).
+ * Called on startup to clean up zombies from crashed sessions.
+ */
+export function killStaleServers(): number {
+  const servers = loadServersFile();
+  let killed = 0;
+
+  for (const [portStr, info] of Object.entries(servers)) {
+    if (!processExists(info.pid)) {
+      // Process doesn't exist, remove from registry
+      delete servers[portStr];
+      killed++;
+    }
+  }
+
+  if (killed > 0) {
+    saveServersFile(servers);
+    console.log(`Cleaned up ${killed} stale server entries`);
+  }
+
+  return killed;
+}

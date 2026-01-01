@@ -10,8 +10,37 @@ import type {
   ListPagesResponse,
   ServerInfoResponse,
 } from "./types";
+import { registerPageRoutes, type PageEntry } from "./http-routes.js";
+import {
+  loadConfig,
+  findAvailablePort,
+  registerServer,
+  unregisterServer,
+  outputPortForDiscovery,
+  cleanupOrphanedBrowsers,
+} from "./config.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
+
+// Re-export external browser mode
+export {
+  serveWithExternalBrowser,
+  type ExternalBrowserOptions,
+  type ExternalBrowserServer,
+} from "./external-browser.js";
+
+// Re-export configuration utilities
+export {
+  loadConfig,
+  findAvailablePort,
+  cleanupOrphanedBrowsers,
+  detectOrphanedBrowsers,
+  type DevBrowserConfig,
+  type BrowserConfig,
+  type BrowserMode,
+  type ServerInfo,
+  type OrphanedBrowser,
+} from "./config.js";
 
 export interface DevBrowserServer {
   wsEndpoint: string;
@@ -52,9 +81,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 }
 
 export async function serve(options: ServeOptions = {}): Promise<DevBrowserServer> {
-  const port = options.port ?? 9222;
+  const config = loadConfig();
+
+  // Use dynamic port allocation if port not specified
+  const port = options.port ?? await findAvailablePort(config);
   const headless = options.headless ?? false;
-  const cdpPort = options.cdpPort ?? 9223;
+  const cdpPort = options.cdpPort ?? config.cdpPort;
   const profileDir = options.profileDir;
 
   // Validate port numbers
@@ -77,6 +109,14 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   mkdirSync(userDataDir, { recursive: true });
   console.log(`Using persistent browser profile: ${userDataDir}`);
 
+  // Clean up any orphaned browsers from previous crashed sessions
+  // This handles the case where Node crashed but Chrome is still running on the CDP port
+  const orphansCleaned = cleanupOrphanedBrowsers([cdpPort]);
+  if (orphansCleaned > 0) {
+    // Give the OS a moment to release the port
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
   console.log("Launching browser with persistent context...");
 
   // Launch persistent context - this persists cookies, localStorage, cache, etc.
@@ -91,12 +131,6 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
   const wsEndpoint = cdpInfo.webSocketDebuggerUrl;
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
-
-  // Registry entry type for page tracking
-  interface PageEntry {
-    page: Page;
-    targetId: string;
-  }
 
   // Registry: name -> PageEntry
   const registry = new Map<string, PageEntry>();
@@ -165,7 +199,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       });
     }
 
-    const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId };
+    const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId, mode: "launch" };
     res.json(response);
   });
 
@@ -184,10 +218,19 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     res.status(404).json({ error: "page not found" });
   });
 
+  // Register shared page operation routes (navigate, evaluate, snapshot, click, fill, etc.)
+  registerPageRoutes(app, registry);
+
   // Start the server
   const server = app.listen(port, () => {
     console.log(`HTTP API server running on port ${port}`);
   });
+
+  // Register this server for multi-agent coordination (standalone mode owns the browser)
+  registerServer(port, process.pid, { cdpPort, mode: "standalone" });
+
+  // Output port for agent discovery (agents parse this to know which port to connect to)
+  outputPortForDiscovery(port);
 
   // Track active connections for clean shutdown
   const connections = new Set<Socket>();
@@ -230,7 +273,10 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
 
     server.close();
-    console.log("Server stopped.");
+
+    // Unregister this server
+    const remainingServers = unregisterServer(port);
+    console.log(`Server stopped. ${remainingServers} other server(s) still running.`);
   };
 
   // Synchronous cleanup for forced exits
