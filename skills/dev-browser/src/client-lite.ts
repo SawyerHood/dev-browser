@@ -6,6 +6,13 @@
  * All page operations (navigate, evaluate, snapshot, click, fill) are
  * handled server-side via HTTP endpoints.
  *
+ * Port Discovery:
+ * The client discovers the server port in this order:
+ * 1. DEV_BROWSER_PORT environment variable (explicit)
+ * 2. tmp/port file in skill directory (same session)
+ * 3. Most recent server from ~/.dev-browser/active-servers.json
+ * 4. Default port 19222 as last resort
+ *
  * Benefits:
  * - No Playwright dependency (~170MB savings per agent)
  * - Simpler client implementation
@@ -27,6 +34,46 @@ import type {
   WaitForSelectorResponse,
   PageInfoResponse,
 } from "./types";
+import { readPortFile, getMostRecentServer } from "./config.js";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SKILL_DIR = join(__dirname, "..");
+const DEFAULT_PORT = 19222;
+
+/**
+ * Discover the server port using the following priority:
+ * 1. DEV_BROWSER_PORT environment variable
+ * 2. tmp/port file in skill directory
+ * 3. Most recent server from active-servers.json
+ * 4. Default port as last resort
+ */
+function discoverPort(): number {
+  // 1. Check environment variable
+  const envPort = process.env.DEV_BROWSER_PORT;
+  if (envPort) {
+    const port = parseInt(envPort, 10);
+    if (!isNaN(port)) {
+      return port;
+    }
+  }
+
+  // 2. Check tmp/port file
+  const filePort = readPortFile(SKILL_DIR);
+  if (filePort !== null) {
+    return filePort;
+  }
+
+  // 3. Check active-servers.json for most recent server
+  const recentServer = getMostRecentServer();
+  if (recentServer) {
+    return recentServer.port;
+  }
+
+  // 4. Fall back to default
+  return DEFAULT_PORT;
+}
 
 /** Server mode information */
 export interface ServerInfo {
@@ -88,8 +135,15 @@ export interface DevBrowserLiteClient {
 /**
  * Connect to a dev-browser server using HTTP-only protocol.
  * This lightweight client doesn't require Playwright.
+ *
+ * @param serverUrl - Optional server URL. If not provided, port is auto-discovered.
  */
-export async function connectLite(serverUrl = "http://localhost:9222"): Promise<DevBrowserLiteClient> {
+export async function connectLite(serverUrl?: string): Promise<DevBrowserLiteClient> {
+  // Auto-discover port if no URL provided
+  if (!serverUrl) {
+    const port = discoverPort();
+    serverUrl = `http://localhost:${port}`;
+  }
   // Helper for JSON requests
   async function jsonRequest<T>(path: string, options?: RequestInit): Promise<T> {
     const res = await fetch(`${serverUrl}${path}`, {

@@ -136,8 +136,8 @@ function getDefaultBrowserPath(): string | undefined {
  */
 const DEFAULT_CONFIG: DevBrowserConfig = {
   portRange: {
-    start: 9222,
-    end: 9300,
+    start: 19222, // High port range to avoid Chrome CDP port conflicts (9222-9223)
+    end: 19300,
     step: 2, // Skip odd ports to avoid CDP port collision
   },
   cdpPort: 9223,
@@ -500,4 +500,83 @@ export function cleanupOrphanedBrowsers(cdpPorts?: number[]): number {
  */
 export function outputPortForDiscovery(port: number): void {
   console.log(`PORT=${port}`);
+}
+
+/**
+ * Write port to tmp/port file for client discovery.
+ * The client-lite can read this file to find the server port.
+ */
+export function writePortFile(port: number, skillDir: string): void {
+  const portFile = join(skillDir, "tmp", "port");
+  mkdirSync(join(skillDir, "tmp"), { recursive: true });
+  writeFileSync(portFile, port.toString());
+}
+
+/**
+ * Read port from tmp/port file.
+ * Returns null if file doesn't exist or is invalid.
+ */
+export function readPortFile(skillDir: string): number | null {
+  const portFile = join(skillDir, "tmp", "port");
+  try {
+    if (existsSync(portFile)) {
+      const content = readFileSync(portFile, "utf-8").trim();
+      const port = parseInt(content, 10);
+      return isNaN(port) ? null : port;
+    }
+  } catch {
+    // File doesn't exist or can't be read
+  }
+  return null;
+}
+
+/**
+ * Get the most recently started server from active-servers.json.
+ * Returns null if no servers are running.
+ */
+export function getMostRecentServer(): { port: number; info: ServerInfo } | null {
+  const servers = loadServersFile();
+  const cleaned = cleanupStaleEntries(servers);
+
+  // Save cleaned version back
+  if (Object.keys(servers).length !== Object.keys(cleaned).length) {
+    saveServersFile(cleaned);
+  }
+
+  let mostRecent: { port: number; info: ServerInfo } | null = null;
+  let mostRecentTime = 0;
+
+  for (const [portStr, info] of Object.entries(cleaned)) {
+    const startedAt = new Date(info.startedAt).getTime();
+    if (startedAt > mostRecentTime) {
+      mostRecentTime = startedAt;
+      mostRecent = { port: parseInt(portStr, 10), info };
+    }
+  }
+
+  return mostRecent;
+}
+
+/**
+ * Kill all stale servers (processes that no longer exist).
+ * Called on startup to clean up zombies from crashed sessions.
+ */
+export function killStaleServers(): number {
+  const servers = loadServersFile();
+  let killed = 0;
+
+  for (const [portStr, info] of Object.entries(servers)) {
+    if (!processExists(info.pid)) {
+      // Process doesn't exist, remove from registry
+      delete servers[portStr];
+      killed++;
+    }
+  }
+
+  if (killed > 0) {
+    saveServersFile(servers);
+    console.log(`Cleaned up ${killed} stale server entries`);
+  }
+
+  return killed;
 }

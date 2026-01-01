@@ -6,7 +6,7 @@
     "@/*": "./src/*"
   },
   "scripts": {
-    "build": "esbuild scripts/start-server.ts scripts/start-relay.ts --bundle --platform=node --format=esm --outdir=dist --external:playwright --external:express --external:hono --external:@hono/*",
+    "build": "esbuild scripts/start-server.ts scripts/start-relay.ts scripts/start-external-browser.ts --bundle --platform=node --format=esm --outdir=dist --external:playwright --external:express --external:hono --external:@hono/*",
     "start-server": "node dist/start-server.js",
     "start-server:dev": "npx tsx scripts/start-server.ts",
     "start-extension": "node dist/start-relay.js",

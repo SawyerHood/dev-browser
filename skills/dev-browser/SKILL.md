@@ -21,6 +21,19 @@ Browser automation that maintains page state across script executions. Write sma
 
 **Wait for the `Ready` message before running scripts.**
 
+The server:
+- Auto-assigns a port from 19222-19300 (avoids Chrome CDP port conflicts)
+- Writes the port to `tmp/port` for client discovery
+- Outputs `PORT=XXXX` to stdout
+- Auto-shuts down after 30 minutes of inactivity
+- Cleans up stale server entries on startup
+
+The client (`connectLite()`) auto-discovers the port in this order:
+1. `DEV_BROWSER_PORT` environment variable
+2. `tmp/port` file in skill directory
+3. Most recent server from `~/.dev-browser/active-servers.json`
+4. Default port 19222
+
 The server auto-detects the best browser mode based on user configuration at `~/.dev-browser/config.json`:
 
 - **External Browser** (default when Chrome for Testing is installed): Uses Chrome for Testing via CDP. Browser stays open after automation.
@@ -36,6 +49,8 @@ Browser settings are configured in `~/.dev-browser/config.json`:
 
 ```json
 {
+  "portRange": { "start": 19222, "end": 19300, "step": 2 },
+  "cdpPort": 9223,
   "browser": {
     "mode": "auto",
     "path": "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
@@ -45,6 +60,9 @@ Browser settings are configured in `~/.dev-browser/config.json`:
 
 | Setting | Values | Description |
 |---------|--------|-------------|
+| `portRange.start` | Number (default: 19222) | First port to try for HTTP API server |
+| `portRange.end` | Number (default: 19300) | Last port to try |
+| `cdpPort` | Number (default: 9223) | Chrome DevTools Protocol port |
 | `browser.mode` | `"auto"` (default), `"external"`, `"standalone"` | `auto` uses Chrome for Testing if found, otherwise Playwright |
 | `browser.path` | Path string | Custom browser executable path (auto-detected if not set) |
 | `browser.userDataDir` | Path string | Browser profile directory for external mode (uses browser's default if not set) |
