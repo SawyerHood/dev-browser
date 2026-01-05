@@ -41,6 +41,9 @@ export default defineBackground(() => {
     onDisconnect: () => tabManager.detachAll(),
   });
 
+  // Keep-alive alarm name for Chrome Alarms API
+  const KEEPALIVE_ALARM = "keepAlive";
+
   // Update badge to show active/inactive state
   function updateBadge(isActive: boolean): void {
     chrome.action.setBadgeText({ text: isActive ? "ON" : "" });
@@ -51,8 +54,10 @@ export default defineBackground(() => {
   async function handleStateChange(isActive: boolean): Promise<void> {
     await stateManager.setState({ isActive });
     if (isActive) {
+      chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
       connectionManager.startMaintaining();
     } else {
+      chrome.alarms.clear(KEEPALIVE_ALARM);
       connectionManager.disconnect();
     }
     updateBadge(isActive);
@@ -144,17 +149,14 @@ export default defineBackground(() => {
   stateManager.getState().then((state) => {
     updateBadge(state.isActive);
     if (state.isActive) {
+      // Create keep-alive alarm only when extension is active
+      chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
       connectionManager.startMaintaining();
     }
   });
 
-  // Set up Chrome Alarms keep-alive mechanism
+  // Set up Chrome Alarms keep-alive listener
   // This ensures the connection is maintained even after service worker unloads
-  const KEEPALIVE_ALARM = "keepAlive";
-
-  // Create alarm that fires every 30 seconds
-  chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
-
   chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === KEEPALIVE_ALARM) {
       const state = await stateManager.getState();
