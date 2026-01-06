@@ -57,7 +57,7 @@ If the extension hasn't connected yet, tell the user to launch and activate it. 
 Execute scripts inline using heredocs:
 
 ```bash
-cd skills/dev-browser && npx tsx <<'EOF'
+cd skills/dev-browser && npx tsx --input-type=module <<'EOF'
 import { connect, waitForPageLoad } from "@/client.js";
 
 const client = await connect();
@@ -193,7 +193,7 @@ await element.click();
 Page state persists after failures. Debug with:
 
 ```bash
-cd skills/dev-browser && npx tsx <<'EOF'
+cd skills/dev-browser && npx tsx --input-type=module <<'EOF'
 import { connect } from "@/client.js";
 
 const client = await connect();
