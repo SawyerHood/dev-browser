@@ -15,17 +15,44 @@ Browser automation that maintains page state across script executions. Write sma
 
 ## Setup
 
-Two modes available. Ask the user if unclear which to use.
-
-### Standalone Mode (Default)
-
-Launches a new Chromium browser for fresh automation sessions.
-
 ```bash
 ./skills/dev-browser/server.sh &
 ```
 
-Add `--headless` flag if user requests it. **Wait for the `Ready` message before running scripts.**
+**Wait for the `Ready` message before running scripts.**
+
+The server auto-detects the best browser mode based on user configuration at `~/.dev-browser/config.json`:
+
+- **External Browser** (default when Chrome for Testing is installed): Uses Chrome for Testing via CDP. Browser stays open after automation.
+- **Standalone**: Uses Playwright's built-in Chromium. Use `--standalone` flag to force this mode.
+
+**Flags:**
+- `--standalone` - Force standalone Playwright mode
+- `--headless` - Run headless (standalone mode only)
+
+### Configuration
+
+Browser settings are configured in `~/.dev-browser/config.json`:
+
+```json
+{
+  "browser": {
+    "mode": "auto",
+    "path": "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+  }
+}
+```
+
+| Setting | Values | Description |
+|---------|--------|-------------|
+| `browser.mode` | `"auto"` (default), `"external"`, `"standalone"` | `auto` uses Chrome for Testing if found, otherwise Playwright |
+| `browser.path` | Path string | Custom browser executable path (auto-detected if not set) |
+| `browser.userDataDir` | Path string | Browser profile directory for external mode (uses browser's default if not set) |
+
+**Auto-detection paths:**
+- **macOS**: `/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`
+- **Linux**: `/opt/google/chrome-for-testing/chrome`, `/usr/bin/google-chrome-for-testing`
+- **Windows**: `C:\Program Files\Google\Chrome for Testing\Application\chrome.exe`
 
 ### Extension Mode
 
