@@ -1,10 +1,8 @@
 import express, { type Express, type Request, type Response } from "express";
-import { chromium, type BrowserContext, type Page } from "playwright";
-import { mkdirSync } from "fs";
-import { join } from "path";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { spawn } from "child_process";
 import type { Socket } from "net";
 import type {
-  ServeOptions,
   GetPageRequest,
   GetPageResponse,
   ListPagesResponse,
@@ -16,60 +14,101 @@ import {
   registerServer,
   unregisterServer,
   outputPortForDiscovery,
-  cleanupOrphanedBrowsers,
 } from "./config.js";
 
-export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
+export interface ExternalBrowserOptions {
+  /**
+   * HTTP API port. If not specified, a port is automatically assigned
+   * from the configured range (default: 9222-9300, step 2).
+   * This enables multiple agents to run concurrently.
+   */
+  port?: number;
+  /** CDP port where external browser is listening (default: 9223) */
+  cdpPort?: number;
+  /** Path to browser executable (for auto-launch) */
+  browserPath?: string;
+  /** User data directory for browser profile (for auto-launch) */
+  userDataDir?: string;
+  /** Whether to auto-launch browser if not running (default: true) */
+  autoLaunch?: boolean;
+}
 
-// Re-export external browser mode
-export {
-  serveWithExternalBrowser,
-  type ExternalBrowserOptions,
-  type ExternalBrowserServer,
-} from "./external-browser.js";
-
-// Re-export configuration utilities
-export {
-  loadConfig,
-  findAvailablePort,
-  cleanupOrphanedBrowsers,
-  detectOrphanedBrowsers,
-  type DevBrowserConfig,
-  type BrowserConfig,
-  type BrowserMode,
-  type ServerInfo,
-  type OrphanedBrowser,
-} from "./config.js";
-
-export interface DevBrowserServer {
+export interface ExternalBrowserServer {
   wsEndpoint: string;
   port: number;
+  mode: "external-browser";
   stop: () => Promise<void>;
 }
 
-// Helper to retry fetch with exponential backoff
-async function fetchWithRetry(
-  url: string,
-  maxRetries = 5,
-  delayMs = 500
-): Promise<globalThis.Response> {
-  let lastError: Error | null = null;
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return res;
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      if (i < maxRetries - 1) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs * (i + 1)));
-      }
-    }
+/**
+ * Check if a browser is running on the specified CDP port
+ */
+async function isBrowserRunning(cdpPort: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
-  throw new Error(`Failed after ${maxRetries} retries: ${lastError?.message}`);
 }
 
-// Helper to add timeout to promises
+/**
+ * Get the CDP WebSocket endpoint from a running browser
+ */
+async function getCdpEndpoint(cdpPort: number, maxRetries = 60): Promise<string> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { webSocketDebuggerUrl: string };
+        return data.webSocketDebuggerUrl;
+      }
+    } catch {
+      // Browser not ready yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Browser did not start on port ${cdpPort} within ${maxRetries * 0.5}s`);
+}
+
+/**
+ * Launch browser as a detached process (survives server shutdown)
+ */
+function launchBrowserDetached(
+  browserPath: string,
+  cdpPort: number,
+  userDataDir?: string
+): void {
+  const args = [
+    `--remote-debugging-port=${cdpPort}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+  ];
+
+  // Only add user-data-dir if explicitly configured
+  // This lets the browser use its default profile when not specified
+  if (userDataDir) {
+    args.push(`--user-data-dir=${userDataDir}`);
+  }
+
+  console.log(`Launching browser: ${browserPath}`);
+  console.log(`  CDP port: ${cdpPort}`);
+  console.log(`  User data: ${userDataDir ?? "(default profile)"}`);
+
+  const child = spawn(browserPath, args, {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+}
+
+/**
+ * Helper to add timeout to promises
+ */
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return Promise.race([
     promise,
@@ -79,14 +118,28 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   ]);
 }
 
-export async function serve(options: ServeOptions = {}): Promise<DevBrowserServer> {
+/**
+ * Serve dev-browser by connecting to an external browser via CDP.
+ *
+ * This mode is ideal for:
+ * - Using Chrome for Testing or other specific browser builds
+ * - Keeping the browser open after automation (for manual inspection)
+ * - Development workflows where you want to see automation in a visible browser
+ *
+ * The browser lifecycle is managed externally - this server only connects/disconnects.
+ */
+export async function serveWithExternalBrowser(
+  options: ExternalBrowserOptions = {}
+): Promise<ExternalBrowserServer> {
   const config = loadConfig();
 
   // Use dynamic port allocation if port not specified
   const port = options.port ?? await findAvailablePort(config);
-  const headless = options.headless ?? false;
   const cdpPort = options.cdpPort ?? config.cdpPort;
-  const profileDir = options.profileDir;
+  const autoLaunch = options.autoLaunch ?? true;
+  const browserPath = options.browserPath;
+  // Only use userDataDir if explicitly provided - let browser use default profile otherwise
+  const userDataDir = options.userDataDir;
 
   // Validate port numbers
   if (port < 1 || port > 65535) {
@@ -99,37 +152,41 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     throw new Error("port and cdpPort must be different");
   }
 
-  // Determine user data directory for persistent context
-  const userDataDir = profileDir
-    ? join(profileDir, "browser-data")
-    : join(process.cwd(), ".browser-data");
+  // Check if browser is running, optionally launch it
+  const running = await isBrowserRunning(cdpPort);
 
-  // Create directory if it doesn't exist
-  mkdirSync(userDataDir, { recursive: true });
-  console.log(`Using persistent browser profile: ${userDataDir}`);
-
-  // Clean up any orphaned browsers from previous crashed sessions
-  // This handles the case where Node crashed but Chrome is still running on the CDP port
-  const orphansCleaned = cleanupOrphanedBrowsers([cdpPort]);
-  if (orphansCleaned > 0) {
-    // Give the OS a moment to release the port
-    await new Promise((resolve) => setTimeout(resolve, 500));
+  if (!running) {
+    if (autoLaunch && browserPath) {
+      console.log(`Browser not running on port ${cdpPort}, launching...`);
+      launchBrowserDetached(browserPath, cdpPort, userDataDir);
+    } else if (autoLaunch && !browserPath) {
+      throw new Error(
+        `Browser not running on port ${cdpPort} and no browserPath provided for auto-launch. ` +
+        `Either start the browser manually with --remote-debugging-port=${cdpPort} or provide browserPath.`
+      );
+    } else {
+      throw new Error(
+        `Browser not running on port ${cdpPort}. ` +
+        `Start it with --remote-debugging-port=${cdpPort}`
+      );
+    }
+  } else {
+    console.log(`Browser already running on port ${cdpPort}`);
   }
 
-  console.log("Launching browser with persistent context...");
-
-  // Launch persistent context - this persists cookies, localStorage, cache, etc.
-  const context: BrowserContext = await chromium.launchPersistentContext(userDataDir, {
-    headless,
-    args: [`--remote-debugging-port=${cdpPort}`],
-  });
-  console.log("Browser launched with persistent profile...");
-
-  // Get the CDP WebSocket endpoint from Chrome's JSON API (with retry for slow startup)
-  const cdpResponse = await fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`);
-  const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
-  const wsEndpoint = cdpInfo.webSocketDebuggerUrl;
+  // Wait for CDP endpoint
+  console.log("Waiting for CDP endpoint...");
+  const wsEndpoint = await getCdpEndpoint(cdpPort);
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
+
+  // Connect to the browser via CDP
+  console.log("Connecting to browser via CDP...");
+  const browser: Browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
+  console.log("Connected to external browser");
+
+  // Get the default context (user's browsing context)
+  const contexts = browser.contexts();
+  const context: BrowserContext = contexts[0] || await browser.newContext();
 
   // Registry entry type for page tracking
   interface PageEntry {
@@ -157,7 +214,10 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
   // GET / - server info
   app.get("/", (_req: Request, res: Response) => {
-    const response: ServerInfoResponse = { wsEndpoint };
+    const response: ServerInfoResponse & { mode: string } = {
+      wsEndpoint,
+      mode: "external-browser",
+    };
     res.json(response);
   });
 
@@ -172,7 +232,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   // POST /pages - get or create page
   app.post("/pages", async (req: Request, res: Response) => {
     const body = req.body as GetPageRequest;
-    const { name, viewport } = body;
+    const { name } = body;
 
     if (!name || typeof name !== "string") {
       res.status(400).json({ error: "name is required and must be a string" });
@@ -192,14 +252,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     // Check if page already exists
     let entry = registry.get(name);
     if (!entry) {
-      // Create new page in the persistent context (with timeout to prevent hangs)
+      // Create new page in the context (with timeout to prevent hangs)
       const page = await withTimeout(context.newPage(), 30000, "Page creation timed out after 30s");
-
-      // Apply viewport if provided
-      if (viewport) {
-        await page.setViewportSize(viewport);
-      }
-
       const targetId = await getTargetId(page);
       entry = { page, targetId };
       registry.set(name, entry);
@@ -234,8 +288,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     console.log(`HTTP API server running on port ${port}`);
   });
 
-  // Register this server for multi-agent coordination (standalone mode owns the browser)
-  registerServer(port, process.pid, { cdpPort, mode: "standalone" });
+  // Register this server for multi-agent coordination (external mode doesn't own the browser)
+  registerServer(port, process.pid, { cdpPort, mode: "external" });
 
   // Output port for agent discovery (agents parse this to know which port to connect to)
   outputPortForDiscovery(port);
@@ -250,7 +304,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   // Track if cleanup has been called to avoid double cleanup
   let cleaningUp = false;
 
-  // Cleanup function
+  // Cleanup function - disconnects but does NOT close the browser
   const cleanup = async () => {
     if (cleaningUp) return;
     cleaningUp = true;
@@ -263,7 +317,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
     connections.clear();
 
-    // Close all pages
+    // Close managed pages (pages we created, not user's existing tabs)
     for (const entry of registry.values()) {
       try {
         await entry.page.close();
@@ -273,30 +327,24 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
     registry.clear();
 
-    // Close context (this also closes the browser)
+    // Disconnect from browser (does NOT close it)
     try {
-      await context.close();
+      await browser.close();
     } catch {
-      // Context might already be closed
+      // Already disconnected
     }
 
     server.close();
 
     // Unregister this server
     const remainingServers = unregisterServer(port);
-    console.log(`Server stopped. ${remainingServers} other server(s) still running.`);
+    console.log(
+      `Server stopped. Browser remains open. ` +
+      `${remainingServers} other server(s) still running.`
+    );
   };
 
-  // Synchronous cleanup for forced exits
-  const syncCleanup = () => {
-    try {
-      context.close();
-    } catch {
-      // Best effort
-    }
-  };
-
-  // Signal handlers (consolidated to reduce duplication)
+  // Signal handlers
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
   const signalHandler = async () => {
@@ -314,19 +362,18 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   signals.forEach((sig) => process.on(sig, signalHandler));
   process.on("uncaughtException", errorHandler);
   process.on("unhandledRejection", errorHandler);
-  process.on("exit", syncCleanup);
 
   // Helper to remove all handlers
   const removeHandlers = () => {
     signals.forEach((sig) => process.off(sig, signalHandler));
     process.off("uncaughtException", errorHandler);
     process.off("unhandledRejection", errorHandler);
-    process.off("exit", syncCleanup);
   };
 
   return {
     wsEndpoint,
     port,
+    mode: "external-browser",
     async stop() {
       removeHandlers();
       await cleanup();
