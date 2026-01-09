@@ -66,6 +66,10 @@ The Chrome extension allows Dev Browser to control your existing Chrome browser 
 
 When active, Claude can control your existing Chrome tabs with all your logged-in sessions, cookies, and extensions intact.
 
+## Configuration
+
+Optionally set `DEV_BROWSER_EXECUTABLE_PATH` to use a custom Chromium binary.
+
 ## Permissions
 
 To skip permission prompts, add to `~/.claude/settings.json`:
