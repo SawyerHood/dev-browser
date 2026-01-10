@@ -46,6 +46,15 @@ rm -rf /tmp/dev-browser-skill
 cd ~/.claude/skills/dev-browser && npm install && npm run start-server
 ```
 
+### Install with `sk`
+
+Install dev-browser via [sk](https://github.com/803/skills-supply), the universal skills package manager for coding agents (supports Claude Code, Amp, Codex, OpenCode, etc...).
+
+```bash
+sk pkg add claude-plugin dev-browser@SawyerHood/dev-browser
+sk sync
+```
+
 ### Chrome Extension (Optional)
 
 The Chrome extension allows Dev Browser to control your existing Chrome browser instead of launching a separate Chromium instance. This gives you access to your logged-in sessions, bookmarks, and extensions.
