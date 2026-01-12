@@ -34,13 +34,15 @@ The client (`connectLite()`) auto-discovers the port in this order:
 3. Most recent server from `~/.dev-browser/active-servers.json`
 4. Default port 19222
 
-The server auto-detects the best browser mode based on user configuration at `~/.dev-browser/config.json`:
+The server uses Chrome for Testing via CDP based on configuration at `~/.dev-browser/config.json`:
 
-- **External Browser** (default when Chrome for Testing is installed): Uses Chrome for Testing via CDP. Browser stays open after automation.
-- **Standalone**: Uses Playwright's built-in Chromium. Use `--standalone` flag to force this mode.
+- **External Browser** (default): Uses Chrome for Testing via CDP. Browser stays open after automation.
+- **Standalone**: Uses Playwright's bundled Chromium. **Not recommended** - only available with explicit `--standalone` flag.
+
+**Important**: If Chrome for Testing is not found, the server will fail with an error instead of falling back to Playwright's bundled browser. This ensures consistent browser behavior.
 
 **Flags:**
-- `--standalone` - Force standalone Playwright mode
+- `--standalone` - Force standalone Playwright mode (not recommended)
 - `--headless` - Run headless (standalone mode only)
 
 ### Configuration
@@ -53,7 +55,7 @@ Browser settings are configured in `~/.dev-browser/config.json`:
   "cdpPort": 9223,
   "browser": {
     "mode": "auto",
-    "path": "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+    "path": "/Applications/Chrome for Testing.app"
   }
 }
 ```
@@ -63,8 +65,8 @@ Browser settings are configured in `~/.dev-browser/config.json`:
 | `portRange.start` | Number (default: 19222) | First port to try for HTTP API server |
 | `portRange.end` | Number (default: 19300) | Last port to try |
 | `cdpPort` | Number (default: 9223) | Chrome DevTools Protocol port |
-| `browser.mode` | `"auto"` (default), `"external"`, `"standalone"` | `auto` uses Chrome for Testing if found, otherwise Playwright |
-| `browser.path` | Path string | Custom browser executable path (auto-detected if not set) |
+| `browser.mode` | `"auto"` (default), `"external"`, `"standalone"` | `auto` and `external` use Chrome for Testing; `standalone` uses Playwright (not recommended) |
+| `browser.path` | Path string | Browser executable or .app bundle. On macOS, .app paths use `open -a` for proper Dock icon |
 | `browser.userDataDir` | Path string | Browser profile directory for external mode (uses browser's default if not set) |
 
 **Auto-detection paths:**

@@ -40,10 +40,17 @@ export interface BrowserConfig {
    */
   mode: BrowserMode;
   /**
-   * Path to browser executable for external mode.
-   * If not set, uses platform-specific defaults:
-   * - macOS: /Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
-   * - Linux: /opt/google/chrome-for-testing/chrome or google-chrome-for-testing
+   * Path to browser executable or app bundle for external mode.
+   * If not set, uses platform-specific defaults.
+   *
+   * On macOS, if the path ends with .app (an app bundle), dev-browser
+   * automatically uses `open -a` for proper Dock icon integration.
+   * The app should handle CDP flags internally.
+   *
+   * Examples:
+   * - macOS app bundle: /Applications/Chrome for Testing.app
+   * - macOS binary: ~/.local/apps/Google Chrome for Testing.app/.../Google Chrome for Testing
+   * - Linux: /opt/google/chrome-for-testing/chrome
    * - Windows: C:\Program Files\Google\Chrome for Testing\Application\chrome.exe
    */
   path?: string;
@@ -101,6 +108,7 @@ const SERVERS_FILE = join(CONFIG_DIR, "active-servers.json");
  */
 function getDefaultBrowserPath(): string | undefined {
   const platform = process.platform;
+  const homeDir = process.env.HOME || "";
 
   if (platform === "darwin") {
     // macOS: Check standard installation path
@@ -179,6 +187,15 @@ export function loadConfig(): DevBrowserConfig {
   // Resolve browser path: user config > auto-detection > undefined
   if (!config.browser.path) {
     config.browser.path = getDefaultBrowserPath();
+  } else {
+    // Validate user-specified path exists
+    if (!existsSync(config.browser.path)) {
+      console.warn(
+        `Warning: Configured browser path does not exist: ${config.browser.path}\n` +
+        `Falling back to auto-detection...`
+      );
+      config.browser.path = getDefaultBrowserPath();
+    }
   }
 
   return config;
@@ -197,9 +214,16 @@ export function getResolvedBrowserConfig(): {
   const { browser } = config;
 
   // Determine effective mode
+  // IMPORTANT: We no longer fall back to standalone mode to prevent using Playwright's
+  // bundled Chrome. Only the user's Chrome for Testing installation should be used.
   let effectiveMode: "external" | "standalone";
 
   if (browser.mode === "standalone") {
+    // Standalone mode is explicitly requested - allow it but warn
+    console.warn(
+      `Warning: Standalone mode uses Playwright's bundled Chromium, not Chrome for Testing.\n` +
+      `For consistent browser behavior, use mode "auto" or "external" with Chrome for Testing.`
+    );
     effectiveMode = "standalone";
   } else if (browser.mode === "external") {
     if (!browser.path) {
@@ -210,8 +234,14 @@ export function getResolvedBrowserConfig(): {
     }
     effectiveMode = "external";
   } else {
-    // "auto" mode: use external if browser found, otherwise standalone
-    effectiveMode = browser.path ? "external" : "standalone";
+    // "auto" mode: use external if browser found, otherwise FAIL (don't fall back to standalone)
+    if (!browser.path) {
+      throw new Error(
+        `Chrome for Testing not found at standard locations.\n` +
+        `Set browser.path in ~/.dev-browser/config.json to your Chrome executable or app bundle.`
+      );
+    }
+    effectiveMode = "external";
   }
 
   return {

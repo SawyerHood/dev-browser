@@ -90,12 +90,29 @@ async function getCdpEndpoint(cdpPort: number, maxRetries = 60): Promise<string>
 
 /**
  * Launch browser as a detached process (survives server shutdown)
+ *
+ * On macOS, if browserPath ends with .app (an app bundle), uses `open -a`
+ * for proper Dock icon integration. The app should handle CDP flags internally.
  */
 function launchBrowserDetached(
   browserPath: string,
   cdpPort: number,
   userDataDir?: string
 ): void {
+  // On macOS, if path is an app bundle, use `open -a` for proper Dock icon
+  if (process.platform === "darwin" && browserPath.endsWith(".app")) {
+    console.log(`Launching macOS app: ${browserPath}`);
+    console.log(`  (App handles CDP port and user data dir internally)`);
+
+    const child = spawn("open", ["-a", browserPath], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    return;
+  }
+
+  // Standard launch: spawn binary directly with CDP flags
   const args = [
     `--remote-debugging-port=${cdpPort}`,
     "--no-first-run",

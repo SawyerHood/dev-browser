@@ -56,13 +56,17 @@ if [ "$FORCE_STANDALONE" = true ]; then
     BROWSER_PATH=""
 else
     # Read config using TypeScript helper
-    CONFIG_OUTPUT=$(npx tsx scripts/get-browser-config.ts 2>/dev/null)
-    if [ $? -eq 0 ]; then
+    CONFIG_OUTPUT=$(npx tsx scripts/get-browser-config.ts 2>&1)
+    CONFIG_EXIT=$?
+    if [ $CONFIG_EXIT -eq 0 ]; then
         eval "$CONFIG_OUTPUT"
     else
-        # Fallback to standalone if config read fails
-        BROWSER_MODE="standalone"
-        BROWSER_PATH=""
+        # Config read failed - show error and exit (don't fall back to standalone)
+        echo "Error: Failed to read browser configuration"
+        echo "$CONFIG_OUTPUT"
+        echo ""
+        echo "Set browser.path in ~/.dev-browser/config.json to your Chrome executable or app bundle."
+        exit 1
     fi
 fi
 
@@ -81,21 +85,26 @@ if [ "$BROWSER_MODE" = "external" ] && [ -n "$BROWSER_PATH" ]; then
     fi
     npx tsx scripts/start-external-browser.ts
 else
-    echo "Starting dev-browser server (Standalone mode)..."
+    # Only reach here if --standalone was explicitly passed
     if [ "$FORCE_STANDALONE" = true ]; then
-        echo "  Standalone mode forced via --standalone flag"
-    elif [ -z "$BROWSER_PATH" ]; then
-        echo "  Chrome for Testing not found - using Playwright Chromium"
-        echo "  Configure browser.path in ~/.dev-browser/config.json"
-    fi
-    echo ""
+        echo "Starting dev-browser server (Standalone mode - forced)..."
+        echo "  WARNING: Using Playwright's bundled Chromium, not Chrome for Testing"
+        echo "  For consistent behavior, use Chrome for Testing instead"
+        echo ""
 
-    export HEADLESS=$HEADLESS
-    # Use pre-compiled JS for faster startup (~700ms savings)
-    if [ -f "$SCRIPT_DIR/dist/start-server.js" ]; then
-        node "$SCRIPT_DIR/dist/start-server.js"
+        export HEADLESS=$HEADLESS
+        # Use pre-compiled JS for faster startup (~700ms savings)
+        if [ -f "$SCRIPT_DIR/dist/start-server.js" ]; then
+            node "$SCRIPT_DIR/dist/start-server.js"
+        else
+            # Fallback to tsx if build failed
+            npx tsx scripts/start-server.ts
+        fi
     else
-        # Fallback to tsx if build failed
-        npx tsx scripts/start-server.ts
+        # Should not reach here - config should have failed earlier
+        echo "Error: No browser configured and standalone mode not forced"
+        echo ""
+        echo "Set browser.path in ~/.dev-browser/config.json to your Chrome executable or app bundle."
+        exit 1
     fi
 fi
