@@ -1,5 +1,5 @@
 import express, { type Express, type Request, type Response } from "express";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright";
 import { mkdirSync } from "fs";
 import { join } from "path";
 import type { Socket } from "net";
@@ -9,7 +9,14 @@ import type {
   GetPageResponse,
   ListPagesResponse,
   ServerInfoResponse,
+  RecordingOptions,
+  StartRecordingRequest,
+  StartRecordingResponse,
+  StopRecordingResponse,
+  RecordingStatusResponse,
+  GetVideoPathResponse,
 } from "./types";
+import { encodeFramesToVideo } from "./video-encoder";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
@@ -56,6 +63,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   const headless = options.headless ?? false;
   const cdpPort = options.cdpPort ?? 9223;
   const profileDir = options.profileDir;
+  const recordingsDir = options.recordingsDir ?? join(process.cwd(), "recordings");
 
   // Validate port numbers
   if (port < 1 || port > 65535) {
@@ -73,17 +81,35 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     ? join(profileDir, "browser-data")
     : join(process.cwd(), ".browser-data");
 
-  // Create directory if it doesn't exist
+  // Create directories if they don't exist
   mkdirSync(userDataDir, { recursive: true });
+  mkdirSync(recordingsDir, { recursive: true });
   console.log(`Using persistent browser profile: ${userDataDir}`);
+  console.log(`Recordings directory: ${recordingsDir}`);
 
   console.log("Launching browser with persistent context...");
 
-  // Launch persistent context - this persists cookies, localStorage, cache, etc.
-  const context: BrowserContext = await chromium.launchPersistentContext(userDataDir, {
+  // Build context options
+  const contextOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
     headless,
     args: [`--remote-debugging-port=${cdpPort}`],
-  });
+  };
+
+  // Add Playwright recordVideo if enabled
+  if (options.recordVideo) {
+    mkdirSync(options.recordVideo.dir, { recursive: true });
+    contextOptions.recordVideo = {
+      dir: options.recordVideo.dir,
+      size: options.recordVideo.size,
+    };
+    console.log(`Playwright video recording enabled: ${options.recordVideo.dir}`);
+  }
+
+  // Launch persistent context - this persists cookies, localStorage, cache, etc.
+  const context: BrowserContext = await chromium.launchPersistentContext(
+    userDataDir,
+    contextOptions
+  );
   console.log("Browser launched with persistent profile...");
 
   // Get the CDP WebSocket endpoint from Chrome's JSON API (with retry for slow startup)
@@ -92,10 +118,22 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   const wsEndpoint = cdpInfo.webSocketDebuggerUrl;
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
 
+  // Recording state for a page
+  interface RecordingState {
+    isRecording: boolean;
+    startedAt: Date;
+    frameCount: number;
+    cdpSession: CDPSession;
+    frameBuffer: Buffer[];
+    options: RecordingOptions;
+    outputPath: string;
+  }
+
   // Registry entry type for page tracking
   interface PageEntry {
     page: Page;
     targetId: string;
+    recording?: RecordingState;
   }
 
   // Registry: name -> PageEntry
@@ -181,6 +219,15 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     const entry = registry.get(name);
 
     if (entry) {
+      // Stop any active recording first
+      if (entry.recording?.isRecording) {
+        try {
+          await entry.recording.cdpSession.send("Page.stopScreencast");
+          await entry.recording.cdpSession.detach();
+        } catch {
+          // Ignore errors during cleanup
+        }
+      }
       await entry.page.close();
       registry.delete(name);
       res.json({ success: true });
@@ -189,6 +236,241 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
     res.status(404).json({ error: "page not found" });
   });
+
+  // === Recording Endpoints ===
+
+  // GET /pages/:name/recording/status - check recording status
+  app.get(
+    "/pages/:name/recording/status",
+    (req: Request<{ name: string }>, res: Response) => {
+      const name = decodeURIComponent(req.params.name);
+      const entry = registry.get(name);
+
+      if (!entry) {
+        res.status(404).json({ error: "page not found" });
+        return;
+      }
+
+      const response: RecordingStatusResponse = {
+        isRecording: entry.recording?.isRecording ?? false,
+        startedAt: entry.recording?.startedAt?.toISOString(),
+        frameCount: entry.recording?.frameCount,
+      };
+      res.json(response);
+    }
+  );
+
+  // POST /pages/:name/recording/start - start CDP screencast recording
+  app.post(
+    "/pages/:name/recording/start",
+    async (req: Request<{ name: string }>, res: Response) => {
+      const name = decodeURIComponent(req.params.name);
+      const body = req.body as StartRecordingRequest;
+      const entry = registry.get(name);
+
+      if (!entry) {
+        res.status(404).json({ error: "page not found" });
+        return;
+      }
+
+      if (entry.recording?.isRecording) {
+        const response: StartRecordingResponse = {
+          success: false,
+          error: "Recording already in progress",
+        };
+        res.status(409).json(response);
+        return;
+      }
+
+      try {
+        const recordingOptions: RecordingOptions = {
+          maxWidth: body.options?.maxWidth ?? 1280,
+          maxHeight: body.options?.maxHeight ?? 720,
+          quality: body.options?.quality ?? 80,
+          everyNthFrame: body.options?.everyNthFrame ?? 1,
+        };
+
+        // Create CDP session for this page
+        const cdpSession = await context.newCDPSession(entry.page);
+
+        // Generate output path
+        const timestamp = Date.now();
+        const safeName = name.replace(/[^a-zA-Z0-9-_]/g, "_");
+        const outputPath = join(recordingsDir, `${safeName}-${timestamp}.webm`);
+
+        // Initialize recording state
+        entry.recording = {
+          isRecording: true,
+          startedAt: new Date(),
+          frameCount: 0,
+          cdpSession,
+          frameBuffer: [],
+          options: recordingOptions,
+          outputPath,
+        };
+
+        // Set up frame handler
+        cdpSession.on("Page.screencastFrame", async (params) => {
+          if (!entry.recording?.isRecording) return;
+
+          // Acknowledge frame to receive next one
+          try {
+            await cdpSession.send("Page.screencastFrameAck", {
+              sessionId: params.sessionId,
+            });
+          } catch {
+            // Session might be closed
+            return;
+          }
+
+          // Store frame
+          const frameData = Buffer.from(params.data, "base64");
+          entry.recording.frameBuffer.push(frameData);
+          entry.recording.frameCount++;
+        });
+
+        // Start screencast
+        await cdpSession.send("Page.startScreencast", {
+          format: "jpeg",
+          quality: recordingOptions.quality,
+          maxWidth: recordingOptions.maxWidth,
+          maxHeight: recordingOptions.maxHeight,
+          everyNthFrame: recordingOptions.everyNthFrame,
+        });
+
+        const response: StartRecordingResponse = { success: true };
+        res.json(response);
+      } catch (err) {
+        entry.recording = undefined;
+        const response: StartRecordingResponse = {
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+        res.status(500).json(response);
+      }
+    }
+  );
+
+  // POST /pages/:name/recording/stop - stop recording and encode video
+  app.post(
+    "/pages/:name/recording/stop",
+    async (req: Request<{ name: string }>, res: Response) => {
+      const name = decodeURIComponent(req.params.name);
+      const entry = registry.get(name);
+
+      if (!entry) {
+        res.status(404).json({ error: "page not found" });
+        return;
+      }
+
+      if (!entry.recording?.isRecording) {
+        const response: StopRecordingResponse = {
+          success: false,
+          error: "No recording in progress",
+        };
+        res.status(409).json(response);
+        return;
+      }
+
+      try {
+        const recording = entry.recording;
+        recording.isRecording = false;
+
+        // Stop screencast
+        try {
+          await recording.cdpSession.send("Page.stopScreencast");
+          await recording.cdpSession.detach();
+        } catch {
+          // Session might already be closed
+        }
+
+        // Calculate duration
+        const durationMs = Date.now() - recording.startedAt.getTime();
+        const frameCount = recording.frameCount;
+
+        // Encode frames to video
+        let videoPath: string;
+        if (recording.frameBuffer.length > 0) {
+          videoPath = await encodeFramesToVideo(
+            recording.frameBuffer,
+            recording.outputPath,
+            { fps: 30, format: "webm" }
+          );
+        } else {
+          videoPath = recording.outputPath;
+        }
+
+        // Clean up recording state
+        entry.recording = undefined;
+
+        const response: StopRecordingResponse = {
+          success: true,
+          videoPath,
+          durationMs,
+          frameCount,
+        };
+        res.json(response);
+      } catch (err) {
+        entry.recording = undefined;
+        const response: StopRecordingResponse = {
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+        res.status(500).json(response);
+      }
+    }
+  );
+
+  // GET /pages/:name/video - get Playwright recordVideo path
+  app.get(
+    "/pages/:name/video",
+    async (req: Request<{ name: string }>, res: Response) => {
+      const name = decodeURIComponent(req.params.name);
+      const entry = registry.get(name);
+
+      if (!entry) {
+        res.status(404).json({ error: "page not found" });
+        return;
+      }
+
+      if (!options.recordVideo) {
+        const response: GetVideoPathResponse = {
+          pending: false,
+          error: "Server not started with recordVideo option",
+        };
+        res.json(response);
+        return;
+      }
+
+      try {
+        const video = entry.page.video();
+        if (!video) {
+          const response: GetVideoPathResponse = {
+            pending: false,
+            error: "No video for this page",
+          };
+          res.json(response);
+          return;
+        }
+
+        // video.path() throws if video is still being written
+        try {
+          const videoPath = await video.path();
+          const response: GetVideoPathResponse = { videoPath, pending: false };
+          res.json(response);
+        } catch {
+          const response: GetVideoPathResponse = { pending: true };
+          res.json(response);
+        }
+      } catch (err) {
+        const response: GetVideoPathResponse = {
+          pending: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+        res.json(response);
+      }
+    }
+  );
 
   // Start the server
   const server = app.listen(port, () => {
@@ -218,9 +500,18 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
     connections.clear();
 
-    // Close all pages
+    // Close all pages (stop recordings first)
     for (const entry of registry.values()) {
       try {
+        // Stop any active recording
+        if (entry.recording?.isRecording) {
+          try {
+            await entry.recording.cdpSession.send("Page.stopScreencast");
+            await entry.recording.cdpSession.detach();
+          } catch {
+            // Ignore recording cleanup errors
+          }
+        }
         await entry.page.close();
       } catch {
         // Page might already be closed

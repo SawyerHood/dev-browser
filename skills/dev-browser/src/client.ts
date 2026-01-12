@@ -5,6 +5,12 @@ import type {
   ListPagesResponse,
   ServerInfoResponse,
   ViewportSize,
+  RecordingOptions,
+  StartRecordingRequest,
+  StartRecordingResponse,
+  StopRecordingResponse,
+  RecordingStatusResponse,
+  GetVideoPathResponse,
 } from "./types";
 import { getSnapshotScript } from "./snapshot/browser-script";
 
@@ -242,6 +248,25 @@ export interface DevBrowserClient {
    * Get server information including mode and extension connection status.
    */
   getServerInfo: () => Promise<ServerInfo>;
+  /**
+   * Start recording a page using CDP Screencast.
+   * Captures frames until stopRecording is called.
+   */
+  startRecording: (name: string, options?: RecordingOptions) => Promise<void>;
+  /**
+   * Stop recording and get the video file path.
+   */
+  stopRecording: (name: string) => Promise<{ videoPath: string; durationMs: number; frameCount: number }>;
+  /**
+   * Check if a page is currently being recorded.
+   */
+  getRecordingStatus: (name: string) => Promise<RecordingStatusResponse>;
+  /**
+   * Get the Playwright recordVideo path for a page.
+   * Only works if server was started with recordVideo option.
+   * Video is only available after page is closed.
+   */
+  getVideoPath: (name: string) => Promise<string | null>;
 }
 
 export async function connect(serverUrl = "http://localhost:9222"): Promise<DevBrowserClient> {
@@ -469,6 +494,69 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
         mode: (info.mode as "launch" | "extension") ?? "launch",
         extensionConnected: info.extensionConnected,
       };
+    },
+
+    async startRecording(name: string, options?: RecordingOptions): Promise<void> {
+      const body: StartRecordingRequest = { options };
+      const res = await fetch(
+        `${serverUrl}/pages/${encodeURIComponent(name)}/recording/start`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }
+      );
+
+      const data = (await res.json()) as StartRecordingResponse;
+      if (!data.success) {
+        throw new Error(data.error || `Failed to start recording: ${res.status}`);
+      }
+    },
+
+    async stopRecording(
+      name: string
+    ): Promise<{ videoPath: string; durationMs: number; frameCount: number }> {
+      const res = await fetch(
+        `${serverUrl}/pages/${encodeURIComponent(name)}/recording/stop`,
+        { method: "POST" }
+      );
+
+      const data = (await res.json()) as StopRecordingResponse;
+      if (!data.success || !data.videoPath) {
+        throw new Error(data.error || "Failed to stop recording");
+      }
+
+      return {
+        videoPath: data.videoPath,
+        durationMs: data.durationMs ?? 0,
+        frameCount: data.frameCount ?? 0,
+      };
+    },
+
+    async getRecordingStatus(name: string): Promise<RecordingStatusResponse> {
+      const res = await fetch(
+        `${serverUrl}/pages/${encodeURIComponent(name)}/recording/status`
+      );
+
+      if (!res.ok) {
+        throw new Error(`Failed to get recording status: ${res.status}`);
+      }
+
+      return (await res.json()) as RecordingStatusResponse;
+    },
+
+    async getVideoPath(name: string): Promise<string | null> {
+      const res = await fetch(
+        `${serverUrl}/pages/${encodeURIComponent(name)}/video`
+      );
+
+      const data = (await res.json()) as GetVideoPathResponse;
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      return data.pending ? null : (data.videoPath ?? null);
     },
   };
 }
