@@ -100,16 +100,44 @@ try {
 
 console.log("Starting dev browser server...");
 const headless = process.env.HEADLESS === "true";
+
+// Parse recording options from environment variables
+const recordVideoDir = process.env.RECORD_VIDEO_DIR;
+const recordVideoWidth = process.env.RECORD_VIDEO_WIDTH
+  ? parseInt(process.env.RECORD_VIDEO_WIDTH, 10)
+  : undefined;
+const recordVideoHeight = process.env.RECORD_VIDEO_HEIGHT
+  ? parseInt(process.env.RECORD_VIDEO_HEIGHT, 10)
+  : undefined;
+
+const recordVideo = recordVideoDir
+  ? {
+      dir: recordVideoDir,
+      size:
+        recordVideoWidth && recordVideoHeight
+          ? { width: recordVideoWidth, height: recordVideoHeight }
+          : undefined,
+    }
+  : undefined;
+
+const recordingsDir = process.env.RECORDINGS_DIR || join(__dirname, "..", "recordings");
+
 const server = await serve({
   port: 9222,
   headless,
   profileDir,
+  recordVideo,
+  recordingsDir,
 });
 
 console.log(`Dev browser server started`);
 console.log(`  WebSocket: ${server.wsEndpoint}`);
 console.log(`  Tmp directory: ${tmpDir}`);
 console.log(`  Profile directory: ${profileDir}`);
+console.log(`  Recordings directory: ${recordingsDir}`);
+if (recordVideo) {
+  console.log(`  Playwright video recording: ${recordVideo.dir}`);
+}
 console.log(`\nReady`);
 console.log(`\nPress Ctrl+C to stop`);
 
