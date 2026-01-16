@@ -18,7 +18,7 @@
 import { createServer } from "net";
 import { execSync } from "child_process";
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 
 /**
  * Browser mode selection.
@@ -99,9 +99,130 @@ export interface ServerInfo {
   startedAt: string;
 }
 
-const CONFIG_DIR = join(process.env.HOME || "", ".dev-browser");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
-const SERVERS_FILE = join(CONFIG_DIR, "active-servers.json");
+/**
+ * Get XDG config home directory.
+ * Respects $XDG_CONFIG_HOME, falls back to ~/.config
+ */
+function getXdgConfigHome(): string {
+  return process.env.XDG_CONFIG_HOME || join(process.env.HOME || "", ".config");
+}
+
+/**
+ * Get XDG state home directory.
+ * Respects $XDG_STATE_HOME, falls back to ~/.local/state
+ */
+function getXdgStateHome(): string {
+  return process.env.XDG_STATE_HOME || join(process.env.HOME || "", ".local", "state");
+}
+
+/**
+ * Search for a config file by walking up the directory tree.
+ * Looks for .dev-browser/config.json in each directory.
+ *
+ * @param startDir - Directory to start searching from (defaults to cwd)
+ * @returns Path to config file if found, undefined otherwise
+ */
+function findProjectConfig(startDir?: string): string | undefined {
+  let dir = startDir || process.cwd();
+  const root = dirname(dir) === dir ? dir : "/"; // Handle root directory
+
+  while (true) {
+    const configPath = join(dir, ".dev-browser", "config.json");
+    if (existsSync(configPath)) {
+      return configPath;
+    }
+
+    const parent = dirname(dir);
+    if (parent === dir || dir === root) {
+      // Reached filesystem root
+      break;
+    }
+    dir = parent;
+  }
+
+  return undefined;
+}
+
+/**
+ * Get the config file path using the following priority:
+ * 1. DEV_BROWSER_CONFIG environment variable (explicit override)
+ * 2. .dev-browser/config.json in cwd or ancestor directories (project config)
+ * 3. $XDG_CONFIG_HOME/dev-browser/config.json (XDG compliant)
+ * 4. ~/.config/dev-browser/config.json (XDG default)
+ * 5. ~/.dev-browser/config.json (legacy fallback)
+ *
+ * @returns Path to config file and whether it exists
+ */
+function getConfigFilePath(): { path: string; exists: boolean } {
+  // 1. Explicit override via environment variable
+  const envConfig = process.env.DEV_BROWSER_CONFIG;
+  if (envConfig) {
+    return { path: envConfig, exists: existsSync(envConfig) };
+  }
+
+  // 2. Project-level config (walk up directory tree)
+  const projectConfig = findProjectConfig();
+  if (projectConfig) {
+    return { path: projectConfig, exists: true };
+  }
+
+  // 3. XDG config home
+  const xdgConfig = join(getXdgConfigHome(), "dev-browser", "config.json");
+  if (existsSync(xdgConfig)) {
+    return { path: xdgConfig, exists: true };
+  }
+
+  // 4. XDG default (~/.config) - only if XDG_CONFIG_HOME is set to something else
+  if (process.env.XDG_CONFIG_HOME) {
+    const defaultXdgConfig = join(process.env.HOME || "", ".config", "dev-browser", "config.json");
+    if (existsSync(defaultXdgConfig)) {
+      return { path: defaultXdgConfig, exists: true };
+    }
+  }
+
+  // 5. Legacy fallback
+  const legacyConfig = join(process.env.HOME || "", ".dev-browser", "config.json");
+  return { path: legacyConfig, exists: existsSync(legacyConfig) };
+}
+
+/**
+ * Get the state directory for runtime state (active-servers.json, etc).
+ * Uses XDG_STATE_HOME if available, falls back to legacy location.
+ *
+ * Priority:
+ * 1. $XDG_STATE_HOME/dev-browser
+ * 2. ~/.local/state/dev-browser
+ * 3. ~/.dev-browser (legacy)
+ */
+function getStateDir(): string {
+  // Try XDG state home first
+  const xdgStateDir = join(getXdgStateHome(), "dev-browser");
+
+  // If XDG_STATE_HOME is explicitly set, use it
+  if (process.env.XDG_STATE_HOME) {
+    return xdgStateDir;
+  }
+
+  // Check if XDG default location exists or legacy exists
+  const defaultXdgStateDir = join(process.env.HOME || "", ".local", "state", "dev-browser");
+  const legacyDir = join(process.env.HOME || "", ".dev-browser");
+
+  // Prefer XDG if the directory already exists there
+  if (existsSync(defaultXdgStateDir)) {
+    return defaultXdgStateDir;
+  }
+
+  // Fall back to legacy if it exists
+  if (existsSync(legacyDir)) {
+    return legacyDir;
+  }
+
+  // Default to XDG location for new installations
+  return defaultXdgStateDir;
+}
+
+// Computed paths - these are functions now to support dynamic discovery
+const getServersFile = () => join(getStateDir(), "active-servers.json");
 
 /**
  * Get platform-specific default browser path for Chrome for Testing.
@@ -157,15 +278,24 @@ const DEFAULT_CONFIG: DevBrowserConfig = {
 };
 
 /**
- * Load configuration from ~/.dev-browser/config.json with defaults.
+ * Load configuration with defaults.
  * Merges user config with defaults and resolves platform-specific browser paths.
+ *
+ * Config file discovery priority:
+ * 1. DEV_BROWSER_CONFIG environment variable
+ * 2. .dev-browser/config.json in cwd or ancestor directories (project config)
+ * 3. $XDG_CONFIG_HOME/dev-browser/config.json
+ * 4. ~/.config/dev-browser/config.json
+ * 5. ~/.dev-browser/config.json (legacy)
  */
 export function loadConfig(): DevBrowserConfig {
   let config = { ...DEFAULT_CONFIG };
 
+  const { path: configFile, exists } = getConfigFilePath();
+
   try {
-    if (existsSync(CONFIG_FILE)) {
-      const content = readFileSync(CONFIG_FILE, "utf-8");
+    if (exists) {
+      const content = readFileSync(configFile, "utf-8");
       const userConfig = JSON.parse(content);
       config = {
         ...DEFAULT_CONFIG,
@@ -181,7 +311,7 @@ export function loadConfig(): DevBrowserConfig {
       };
     }
   } catch (err) {
-    console.warn(`Warning: Could not load config from ${CONFIG_FILE}:`, err);
+    console.warn(`Warning: Could not load config from ${configFile}:`, err);
   }
 
   // Resolve browser path: user config > auto-detection > undefined
@@ -320,12 +450,13 @@ function processExists(pid: number): boolean {
  * Load the servers file, handling both old format (pid only) and new format (ServerInfo).
  */
 function loadServersFile(): Record<string, ServerInfo> {
-  if (!existsSync(SERVERS_FILE)) {
+  const serversFile = getServersFile();
+  if (!existsSync(serversFile)) {
     return {};
   }
 
   try {
-    const content = readFileSync(SERVERS_FILE, "utf-8");
+    const content = readFileSync(serversFile, "utf-8");
     const data = JSON.parse(content);
 
     // Handle migration from old format { port: pid } to new format { port: ServerInfo }
@@ -353,8 +484,9 @@ function loadServersFile(): Record<string, ServerInfo> {
  * Save the servers file.
  */
 function saveServersFile(servers: Record<string, ServerInfo>): void {
-  mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(SERVERS_FILE, JSON.stringify(servers, null, 2));
+  const stateDir = getStateDir();
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(getServersFile(), JSON.stringify(servers, null, 2));
 }
 
 /**
@@ -383,7 +515,7 @@ export function registerServer(
     mode?: "standalone" | "external";
   }
 ): void {
-  mkdirSync(CONFIG_DIR, { recursive: true });
+  mkdirSync(getStateDir(), { recursive: true });
 
   let servers = loadServersFile();
   servers = cleanupStaleEntries(servers);

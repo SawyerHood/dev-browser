@@ -16,6 +16,12 @@ import type {
   SelectRefResponse,
 } from "../types";
 
+// Mock the config module to isolate tests from filesystem state
+vi.mock("../config.js", () => ({
+  readPortFile: vi.fn(() => null),
+  getMostRecentServer: vi.fn(() => null),
+}));
+
 // Mock fetch globally
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -71,8 +77,9 @@ describe("connectLite", () => {
 
     await client.list();
 
+    // Default port is 19222 (high range to avoid Chrome CDP port conflicts)
     expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:9222/pages",
+      "http://localhost:19222/pages",
       expect.any(Object)
     );
   });
