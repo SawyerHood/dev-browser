@@ -103,7 +103,7 @@ export interface ServerInfo {
  * Get XDG config home directory.
  * Respects $XDG_CONFIG_HOME, falls back to ~/.config
  */
-function getXdgConfigHome(): string {
+export function getXdgConfigHome(): string {
   return process.env.XDG_CONFIG_HOME || join(process.env.HOME || "", ".config");
 }
 
@@ -111,7 +111,7 @@ function getXdgConfigHome(): string {
  * Get XDG state home directory.
  * Respects $XDG_STATE_HOME, falls back to ~/.local/state
  */
-function getXdgStateHome(): string {
+export function getXdgStateHome(): string {
   return process.env.XDG_STATE_HOME || join(process.env.HOME || "", ".local", "state");
 }
 
@@ -122,7 +122,7 @@ function getXdgStateHome(): string {
  * @param startDir - Directory to start searching from (defaults to cwd)
  * @returns Path to config file if found, undefined otherwise
  */
-function findProjectConfig(startDir?: string): string | undefined {
+export function findProjectConfig(startDir?: string): string | undefined {
   let dir = startDir || process.cwd();
   const root = dirname(dir) === dir ? dir : "/"; // Handle root directory
 
@@ -153,7 +153,7 @@ function findProjectConfig(startDir?: string): string | undefined {
  *
  * @returns Path to config file and whether it exists
  */
-function getConfigFilePath(): { path: string; exists: boolean } {
+export function getConfigFilePath(): { path: string; exists: boolean } {
   // 1. Explicit override via environment variable
   const envConfig = process.env.DEV_BROWSER_CONFIG;
   if (envConfig) {
@@ -194,7 +194,7 @@ function getConfigFilePath(): { path: string; exists: boolean } {
  * 2. ~/.local/state/dev-browser
  * 3. ~/.dev-browser (legacy)
  */
-function getStateDir(): string {
+export function getStateDir(): string {
   // Try XDG state home first
   const xdgStateDir = join(getXdgStateHome(), "dev-browser");
 
