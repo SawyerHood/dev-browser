@@ -47,7 +47,15 @@ The server uses Chrome for Testing via CDP based on configuration at `~/.dev-bro
 
 ### Configuration
 
-Browser settings are configured in `~/.dev-browser/config.json`:
+Browser settings are configured in a `config.json` file. Dev-browser searches for this file in the following order:
+
+1. `DEV_BROWSER_CONFIG` environment variable (explicit path)
+2. `.dev-browser/config.json` in current directory or any parent (project config)
+3. `$XDG_CONFIG_HOME/dev-browser/config.json` (Linux/macOS XDG)
+4. `~/.config/dev-browser/config.json` (XDG default)
+5. `~/.dev-browser/config.json` (legacy)
+
+**Example config:**
 
 ```json
 {
@@ -73,6 +81,39 @@ Browser settings are configured in `~/.dev-browser/config.json`:
 - **macOS**: `/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`
 - **Linux**: `/opt/google/chrome-for-testing/chrome`, `/usr/bin/google-chrome-for-testing`
 - **Windows**: `C:\Program Files\Google\Chrome for Testing\Application\chrome.exe`
+
+#### Project-Level Configuration
+
+Place a `.dev-browser/config.json` in your project root to use project-specific browser settings. This is useful when:
+
+- Different projects need different Chrome installations
+- Working in containers/devcontainers with custom browser paths
+- Sharing browser configuration with your team via version control
+
+#### XDG Base Directory Support
+
+On Linux and macOS, dev-browser follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html):
+
+| Data Type | Location |
+|-----------|----------|
+| Config | `$XDG_CONFIG_HOME/dev-browser/config.json` (default: `~/.config/dev-browser/`) |
+| State | `$XDG_STATE_HOME/dev-browser/` (default: `~/.local/state/dev-browser/`) |
+
+State files (like `active-servers.json`) are stored separately from config:
+
+1. `$XDG_STATE_HOME/dev-browser/` if `XDG_STATE_HOME` is set
+2. `~/.local/state/dev-browser/` if it exists
+3. `~/.dev-browser/` (legacy fallback)
+
+#### Environment Variable Override
+
+Set `DEV_BROWSER_CONFIG` to explicitly specify a config file path:
+
+```bash
+DEV_BROWSER_CONFIG=/path/to/config.json ./server.sh
+```
+
+This takes highest priority and is useful for CI/CD pipelines or container environments.
 
 ### Extension Mode
 
