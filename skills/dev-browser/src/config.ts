@@ -40,10 +40,17 @@ export interface BrowserConfig {
    */
   mode: BrowserMode;
   /**
-   * Path to browser executable for external mode.
-   * If not set, uses platform-specific defaults:
-   * - macOS: /Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
-   * - Linux: /opt/google/chrome-for-testing/chrome or google-chrome-for-testing
+   * Path to browser executable or app bundle for external mode.
+   * If not set, uses platform-specific defaults.
+   *
+   * On macOS, if the path ends with .app (an app bundle), dev-browser
+   * automatically uses `open -a` for proper Dock icon integration.
+   * The app should handle CDP flags internally.
+   *
+   * Examples:
+   * - macOS app bundle: /Applications/Chrome for Testing.app
+   * - macOS binary: ~/.local/apps/Google Chrome for Testing.app/.../Google Chrome for Testing
+   * - Linux: /opt/google/chrome-for-testing/chrome
    * - Windows: C:\Program Files\Google\Chrome for Testing\Application\chrome.exe
    */
   path?: string;
@@ -101,6 +108,7 @@ const SERVERS_FILE = join(CONFIG_DIR, "active-servers.json");
  */
 function getDefaultBrowserPath(): string | undefined {
   const platform = process.platform;
+  const homeDir = process.env.HOME || "";
 
   if (platform === "darwin") {
     // macOS: Check standard installation path
@@ -136,8 +144,8 @@ function getDefaultBrowserPath(): string | undefined {
  */
 const DEFAULT_CONFIG: DevBrowserConfig = {
   portRange: {
-    start: 9222,
-    end: 9300,
+    start: 19222, // High port range to avoid Chrome CDP port conflicts (9222-9223)
+    end: 19300,
     step: 2, // Skip odd ports to avoid CDP port collision
   },
   cdpPort: 9223,
@@ -179,6 +187,15 @@ export function loadConfig(): DevBrowserConfig {
   // Resolve browser path: user config > auto-detection > undefined
   if (!config.browser.path) {
     config.browser.path = getDefaultBrowserPath();
+  } else {
+    // Validate user-specified path exists
+    if (!existsSync(config.browser.path)) {
+      console.warn(
+        `Warning: Configured browser path does not exist: ${config.browser.path}\n` +
+        `Falling back to auto-detection...`
+      );
+      config.browser.path = getDefaultBrowserPath();
+    }
   }
 
   return config;
@@ -197,9 +214,16 @@ export function getResolvedBrowserConfig(): {
   const { browser } = config;
 
   // Determine effective mode
+  // IMPORTANT: We no longer fall back to standalone mode to prevent using Playwright's
+  // bundled Chrome. Only the user's Chrome for Testing installation should be used.
   let effectiveMode: "external" | "standalone";
 
   if (browser.mode === "standalone") {
+    // Standalone mode is explicitly requested - allow it but warn
+    console.warn(
+      `Warning: Standalone mode uses Playwright's bundled Chromium, not Chrome for Testing.\n` +
+      `For consistent browser behavior, use mode "auto" or "external" with Chrome for Testing.`
+    );
     effectiveMode = "standalone";
   } else if (browser.mode === "external") {
     if (!browser.path) {
@@ -210,8 +234,14 @@ export function getResolvedBrowserConfig(): {
     }
     effectiveMode = "external";
   } else {
-    // "auto" mode: use external if browser found, otherwise standalone
-    effectiveMode = browser.path ? "external" : "standalone";
+    // "auto" mode: use external if browser found, otherwise FAIL (don't fall back to standalone)
+    if (!browser.path) {
+      throw new Error(
+        `Chrome for Testing not found at standard locations.\n` +
+        `Set browser.path in ~/.dev-browser/config.json to your Chrome executable or app bundle.`
+      );
+    }
+    effectiveMode = "external";
   }
 
   return {
@@ -500,4 +530,83 @@ export function cleanupOrphanedBrowsers(cdpPorts?: number[]): number {
  */
 export function outputPortForDiscovery(port: number): void {
   console.log(`PORT=${port}`);
+}
+
+/**
+ * Write port to tmp/port file for client discovery.
+ * The client-lite can read this file to find the server port.
+ */
+export function writePortFile(port: number, skillDir: string): void {
+  const portFile = join(skillDir, "tmp", "port");
+  mkdirSync(join(skillDir, "tmp"), { recursive: true });
+  writeFileSync(portFile, port.toString());
+}
+
+/**
+ * Read port from tmp/port file.
+ * Returns null if file doesn't exist or is invalid.
+ */
+export function readPortFile(skillDir: string): number | null {
+  const portFile = join(skillDir, "tmp", "port");
+  try {
+    if (existsSync(portFile)) {
+      const content = readFileSync(portFile, "utf-8").trim();
+      const port = parseInt(content, 10);
+      return isNaN(port) ? null : port;
+    }
+  } catch {
+    // File doesn't exist or can't be read
+  }
+  return null;
+}
+
+/**
+ * Get the most recently started server from active-servers.json.
+ * Returns null if no servers are running.
+ */
+export function getMostRecentServer(): { port: number; info: ServerInfo } | null {
+  const servers = loadServersFile();
+  const cleaned = cleanupStaleEntries(servers);
+
+  // Save cleaned version back
+  if (Object.keys(servers).length !== Object.keys(cleaned).length) {
+    saveServersFile(cleaned);
+  }
+
+  let mostRecent: { port: number; info: ServerInfo } | null = null;
+  let mostRecentTime = 0;
+
+  for (const [portStr, info] of Object.entries(cleaned)) {
+    const startedAt = new Date(info.startedAt).getTime();
+    if (startedAt > mostRecentTime) {
+      mostRecentTime = startedAt;
+      mostRecent = { port: parseInt(portStr, 10), info };
+    }
+  }
+
+  return mostRecent;
+}
+
+/**
+ * Kill all stale servers (processes that no longer exist).
+ * Called on startup to clean up zombies from crashed sessions.
+ */
+export function killStaleServers(): number {
+  const servers = loadServersFile();
+  let killed = 0;
+
+  for (const [portStr, info] of Object.entries(servers)) {
+    if (!processExists(info.pid)) {
+      // Process doesn't exist, remove from registry
+      delete servers[portStr];
+      killed++;
+    }
+  }
+
+  if (killed > 0) {
+    saveServersFile(servers);
+    console.log(`Cleaned up ${killed} stale server entries`);
+  }
+
+  return killed;
 }

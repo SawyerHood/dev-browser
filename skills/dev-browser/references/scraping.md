@@ -1,5 +1,7 @@
 # Data Scraping Guide
 
+> **Note**: This guide uses the advanced Playwright client (`client.ts`) which provides access to request/response interception. For most browser automation tasks, use the lightweight `client-lite.ts` instead (see SKILL.md). Only use the Playwright client when you specifically need request interception for scraping.
+
 For large datasets (followers, posts, search results), **intercept and replay network requests** rather than scrolling and parsing the DOM. This is faster, more reliable, and handles pagination automatically.
 
 ## Why Not Scroll?

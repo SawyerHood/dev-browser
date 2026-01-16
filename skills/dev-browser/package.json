@@ -6,8 +6,11 @@
     "@/*": "./src/*"
   },
   "scripts": {
-    "start-server": "npx tsx scripts/start-server.ts",
-    "start-extension": "npx tsx scripts/start-relay.ts",
+    "build": "esbuild scripts/start-server.ts scripts/start-relay.ts scripts/start-external-browser.ts --bundle --platform=node --format=esm --outdir=dist --external:playwright --external:express --external:hono --external:@hono/*",
+    "start-server": "node dist/start-server.js",
+    "start-server:dev": "npx tsx scripts/start-server.ts",
+    "start-extension": "node dist/start-relay.js",
+    "start-extension:dev": "npx tsx scripts/start-relay.ts",
     "dev": "npx tsx --watch src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -21,6 +24,7 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
+    "esbuild": "^0.24.2",
     "tsx": "^4.21.0",
     "typescript": "^5.0.0",
     "vitest": "^2.1.0"

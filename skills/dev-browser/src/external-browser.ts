@@ -1,25 +1,36 @@
-import express, { type Express, type Request, type Response } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { spawn } from "child_process";
 import type { Socket } from "net";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SKILL_DIR = join(__dirname, "..");
 import type {
   GetPageRequest,
   GetPageResponse,
   ListPagesResponse,
   ServerInfoResponse,
 } from "./types";
+import { registerPageRoutes, type PageEntry } from "./http-routes.js";
 import {
   loadConfig,
   findAvailablePort,
   registerServer,
   unregisterServer,
   outputPortForDiscovery,
+  writePortFile,
+  killStaleServers,
 } from "./config.js";
+
+/** Idle timeout in milliseconds (30 minutes) */
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export interface ExternalBrowserOptions {
   /**
    * HTTP API port. If not specified, a port is automatically assigned
-   * from the configured range (default: 9222-9300, step 2).
+   * from the configured range (default: 19222-19300, step 2).
    * This enables multiple agents to run concurrently.
    */
   port?: number;
@@ -31,6 +42,8 @@ export interface ExternalBrowserOptions {
   userDataDir?: string;
   /** Whether to auto-launch browser if not running (default: true) */
   autoLaunch?: boolean;
+  /** Idle timeout in ms before auto-shutdown (default: 30 minutes, 0 to disable) */
+  idleTimeout?: number;
 }
 
 export interface ExternalBrowserServer {
@@ -77,12 +90,29 @@ async function getCdpEndpoint(cdpPort: number, maxRetries = 60): Promise<string>
 
 /**
  * Launch browser as a detached process (survives server shutdown)
+ *
+ * On macOS, if browserPath ends with .app (an app bundle), uses `open -a`
+ * for proper Dock icon integration. The app should handle CDP flags internally.
  */
 function launchBrowserDetached(
   browserPath: string,
   cdpPort: number,
   userDataDir?: string
 ): void {
+  // On macOS, if path is an app bundle, use `open -a` for proper Dock icon
+  if (process.platform === "darwin" && browserPath.endsWith(".app")) {
+    console.log(`Launching macOS app: ${browserPath}`);
+    console.log(`  (App handles CDP port and user data dir internally)`);
+
+    const child = spawn("open", ["-a", browserPath], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    return;
+  }
+
+  // Standard launch: spawn binary directly with CDP flags
   const args = [
     `--remote-debugging-port=${cdpPort}`,
     "--no-first-run",
@@ -131,6 +161,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 export async function serveWithExternalBrowser(
   options: ExternalBrowserOptions = {}
 ): Promise<ExternalBrowserServer> {
+  // Clean up stale server entries on startup
+  killStaleServers();
+
   const config = loadConfig();
 
   // Use dynamic port allocation if port not specified
@@ -140,6 +173,7 @@ export async function serveWithExternalBrowser(
   const browserPath = options.browserPath;
   // Only use userDataDir if explicitly provided - let browser use default profile otherwise
   const userDataDir = options.userDataDir;
+  const idleTimeout = options.idleTimeout ?? IDLE_TIMEOUT_MS;
 
   // Validate port numbers
   if (port < 1 || port > 65535) {
@@ -188,12 +222,6 @@ export async function serveWithExternalBrowser(
   const contexts = browser.contexts();
   const context: BrowserContext = contexts[0] || await browser.newContext();
 
-  // Registry entry type for page tracking
-  interface PageEntry {
-    page: Page;
-    targetId: string;
-  }
-
   // Registry: name -> PageEntry
   const registry = new Map<string, PageEntry>();
 
@@ -211,6 +239,25 @@ export async function serveWithExternalBrowser(
   // Express server for page management
   const app: Express = express();
   app.use(express.json());
+
+  // Idle timeout tracking
+  let lastActivityTime = Date.now();
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Middleware to track activity and reset idle timer
+  app.use((_req: Request, _res: Response, next: NextFunction) => {
+    lastActivityTime = Date.now();
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+    }
+    if (idleTimeout > 0) {
+      idleTimer = setTimeout(() => {
+        console.log(`\nShutting down due to ${idleTimeout / 1000 / 60} minutes of inactivity`);
+        cleanup().then(() => process.exit(0));
+      }, idleTimeout);
+    }
+    next();
+  });
 
   // GET / - server info
   app.get("/", (_req: Request, res: Response) => {
@@ -264,7 +311,7 @@ export async function serveWithExternalBrowser(
       });
     }
 
-    const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId };
+    const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId, mode: "launch" };
     res.json(response);
   });
 
@@ -283,6 +330,9 @@ export async function serveWithExternalBrowser(
     res.status(404).json({ error: "page not found" });
   });
 
+  // Register shared page operation routes (navigate, evaluate, snapshot, click, fill, etc.)
+  registerPageRoutes(app, registry);
+
   // Start the server
   const server = app.listen(port, () => {
     console.log(`HTTP API server running on port ${port}`);
@@ -291,8 +341,20 @@ export async function serveWithExternalBrowser(
   // Register this server for multi-agent coordination (external mode doesn't own the browser)
   registerServer(port, process.pid, { cdpPort, mode: "external" });
 
+  // Write port to tmp/port for client discovery
+  writePortFile(port, SKILL_DIR);
+
   // Output port for agent discovery (agents parse this to know which port to connect to)
   outputPortForDiscovery(port);
+
+  // Start the initial idle timer
+  if (idleTimeout > 0) {
+    idleTimer = setTimeout(() => {
+      console.log(`\nShutting down due to ${idleTimeout / 1000 / 60} minutes of inactivity`);
+      cleanup().then(() => process.exit(0));
+    }, idleTimeout);
+    console.log(`Idle timeout: ${idleTimeout / 1000 / 60} minutes`);
+  }
 
   // Track active connections for clean shutdown
   const connections = new Set<Socket>();
@@ -308,6 +370,12 @@ export async function serveWithExternalBrowser(
   const cleanup = async () => {
     if (cleaningUp) return;
     cleaningUp = true;
+
+    // Clear idle timer
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
 
     console.log("\nShutting down...");
 

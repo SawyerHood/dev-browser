@@ -28,10 +28,7 @@ try {
   // Only output userDataDir if explicitly configured
   console.log(`BROWSER_USER_DATA_DIR=${shellEscape(config.userDataDir || "")}`);
 } catch (err) {
-  // On error, output standalone mode as fallback
-  console.error(`Warning: ${err instanceof Error ? err.message : err}`);
-  console.log(`BROWSER_MODE="standalone"`);
-  console.log(`BROWSER_PATH=""`);
-  console.log(`BROWSER_USER_DATA_DIR=""`);
-  process.exit(0); // Don't fail - standalone is a valid fallback
+  // On error, fail with clear message (don't fall back to standalone)
+  console.error(`Error: ${err instanceof Error ? err.message : err}`);
+  process.exit(1);
 }

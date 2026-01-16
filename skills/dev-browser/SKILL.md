@@ -21,13 +21,28 @@ Browser automation that maintains page state across script executions. Write sma
 
 **Wait for the `Ready` message before running scripts.**
 
-The server auto-detects the best browser mode based on user configuration at `~/.dev-browser/config.json`:
+The server:
+- Auto-assigns a port from 19222-19300 (avoids Chrome CDP port conflicts)
+- Writes the port to `tmp/port` for client discovery
+- Outputs `PORT=XXXX` to stdout
+- Auto-shuts down after 30 minutes of inactivity
+- Cleans up stale server entries on startup
 
-- **External Browser** (default when Chrome for Testing is installed): Uses Chrome for Testing via CDP. Browser stays open after automation.
-- **Standalone**: Uses Playwright's built-in Chromium. Use `--standalone` flag to force this mode.
+The client (`connectLite()`) auto-discovers the port in this order:
+1. `DEV_BROWSER_PORT` environment variable
+2. `tmp/port` file in skill directory
+3. Most recent server from `~/.dev-browser/active-servers.json`
+4. Default port 19222
+
+The server uses Chrome for Testing via CDP based on configuration at `~/.dev-browser/config.json`:
+
+- **External Browser** (default): Uses Chrome for Testing via CDP. Browser stays open after automation.
+- **Standalone**: Uses Playwright's bundled Chromium. **Not recommended** - only available with explicit `--standalone` flag.
+
+**Important**: If Chrome for Testing is not found, the server will fail with an error instead of falling back to Playwright's bundled browser. This ensures consistent browser behavior.
 
 **Flags:**
-- `--standalone` - Force standalone Playwright mode
+- `--standalone` - Force standalone Playwright mode (not recommended)
 - `--headless` - Run headless (standalone mode only)
 
 ### Configuration
@@ -36,17 +51,22 @@ Browser settings are configured in `~/.dev-browser/config.json`:
 
 ```json
 {
+  "portRange": { "start": 19222, "end": 19300, "step": 2 },
+  "cdpPort": 9223,
   "browser": {
     "mode": "auto",
-    "path": "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+    "path": "/Applications/Chrome for Testing.app"
   }
 }
 ```
 
 | Setting | Values | Description |
 |---------|--------|-------------|
-| `browser.mode` | `"auto"` (default), `"external"`, `"standalone"` | `auto` uses Chrome for Testing if found, otherwise Playwright |
-| `browser.path` | Path string | Custom browser executable path (auto-detected if not set) |
+| `portRange.start` | Number (default: 19222) | First port to try for HTTP API server |
+| `portRange.end` | Number (default: 19300) | Last port to try |
+| `cdpPort` | Number (default: 9223) | Chrome DevTools Protocol port |
+| `browser.mode` | `"auto"` (default), `"external"`, `"standalone"` | `auto` and `external` use Chrome for Testing; `standalone` uses Playwright (not recommended) |
+| `browser.path` | Path string | Browser executable or .app bundle. On macOS, .app paths use `open -a` for proper Dock icon |
 | `browser.userDataDir` | Path string | Browser profile directory for external mode (uses browser's default if not set) |
 
 **Auto-detection paths:**
@@ -69,7 +89,8 @@ Connects to user's existing Chrome browser. Use this when:
 cd skills/dev-browser && npm i && npm run start-extension &
 ```
 
-Wait for `Waiting for extension to connect...` followed by `Extension connected` in the console. To know that a client has connected and the browser is ready to be controlled.
+Wait for `Waiting for extension to connect...`
+
 **Workflow:**
 
 1. Scripts call `client.page("name")` just like the normal mode to create new pages / connect to existing ones.
@@ -85,16 +106,16 @@ Execute scripts inline using heredocs:
 
 ```bash
 cd skills/dev-browser && npx tsx <<'EOF'
-import { connect, waitForPageLoad } from "@/client.js";
+import { connectLite } from "@/client-lite.js";
 
-const client = await connect();
-// Create page with custom viewport size (optional)
-const page = await client.page("example", { viewport: { width: 1920, height: 1080 } });
+const client = await connectLite();
+await client.page("example"); // descriptive name like "cnn-homepage"
+await client.setViewportSize("example", 1280, 800);
 
-await page.goto("https://example.com");
-await waitForPageLoad(page);
+await client.navigate("example", "https://example.com");
 
-console.log({ title: await page.title(), url: page.url() });
+const info = await client.getInfo("example");
+console.log({ title: info.title, url: info.url });
 await client.disconnect();
 EOF
 ```
@@ -107,7 +128,7 @@ EOF
 2. **Evaluate state**: Log/return state at the end to decide next steps
 3. **Descriptive page names**: Use `"checkout"`, `"login"`, not `"main"`
 4. **Disconnect to exit**: `await client.disconnect()` - pages persist on server
-5. **Plain JS in evaluate**: `page.evaluate()` runs in browser - no TypeScript syntax
+5. **Plain JS in evaluate**: `client.evaluate()` runs in browser - no TypeScript syntax
 
 ## Workflow Loop
 
@@ -121,19 +142,19 @@ Follow this pattern for complex tasks:
 
 ### No TypeScript in Browser Context
 
-Code passed to `page.evaluate()` runs in the browser, which doesn't understand TypeScript:
+Code passed to `client.evaluate()` runs in the browser, which doesn't understand TypeScript:
 
 ```typescript
 // ✅ Correct: plain JavaScript
-const text = await page.evaluate(() => {
-  return document.body.innerText;
-});
+const text = await client.evaluate("mypage", `
+  document.body.innerText
+`);
 
 // ❌ Wrong: TypeScript syntax will fail at runtime
-const text = await page.evaluate(() => {
+const text = await client.evaluate("mypage", `
   const el: HTMLElement = document.body; // Type annotation breaks in browser!
-  return el.innerText;
-});
+  el.innerText;
+`);
 ```
 
 ## Scraping Data
@@ -143,31 +164,30 @@ For scraping large datasets, intercept and replay network requests rather than s
 ## Client API
 
 ```typescript
-const client = await connect();
+import { connectLite } from "@/client-lite.js";
 
-// Get or create named page (viewport only applies to new pages)
-const page = await client.page("name");
-const pageWithSize = await client.page("name", { viewport: { width: 1920, height: 1080 } });
-
-const pages = await client.list(); // List all page names
-await client.close("name"); // Close a page
-await client.disconnect(); // Disconnect (pages persist)
+const client = await connectLite();
+await client.page("name");              // Get or create named page
+const pages = await client.list();      // List all page names
+await client.close("name");             // Close a page
+await client.disconnect();              // Disconnect (pages persist)
 
 // ARIA Snapshot methods
-const snapshot = await client.getAISnapshot("name"); // Get accessibility tree
-const element = await client.selectSnapshotRef("name", "e5"); // Get element by ref
+const snapshot = await client.getAISnapshot("name");    // Get accessibility tree
+const refInfo = await client.selectRef("name", "e5");   // Get element info by ref
+await client.click("name", "e5");                       // Click element by ref
+await client.fill("name", "e5", "text");                // Fill input by ref
 ```
-
-The `page` object is a standard Playwright Page.
 
 ## Waiting
 
 ```typescript
-import { waitForPageLoad } from "@/client.js";
+// After navigation
+await client.navigate("name", "https://example.com", "networkidle");
 
-await waitForPageLoad(page); // After navigation
-await page.waitForSelector(".results"); // For specific elements
-await page.waitForURL("**/success"); // For specific URL
+// For specific elements
+await client.waitForSelector("name", ".results");
+await client.waitForSelector("name", ".modal", { state: "hidden", timeout: 5000 });
 ```
 
 ## Inspecting Page State
@@ -175,8 +195,13 @@ await page.waitForURL("**/success"); // For specific URL
 ### Screenshots
 
 ```typescript
-await page.screenshot({ path: "tmp/screenshot.png" });
-await page.screenshot({ path: "tmp/full.png", fullPage: true });
+import { writeFileSync } from "fs";
+
+const result = await client.screenshot("name");
+writeFileSync("tmp/screenshot.png", Buffer.from(result.screenshot, "base64"));
+
+const full = await client.screenshot("name", { fullPage: true });
+writeFileSync("tmp/full.png", Buffer.from(full.screenshot, "base64"));
 ```
 
 ### ARIA Snapshot (Element Discovery)
@@ -211,8 +236,13 @@ Use `getAISnapshot()` to discover page elements. Returns YAML-formatted accessib
 const snapshot = await client.getAISnapshot("hackernews");
 console.log(snapshot); // Find the ref you need
 
-const element = await client.selectSnapshotRef("hackernews", "e2");
-await element.click();
+// Get info about an element
+const refInfo = await client.selectRef("hackernews", "e2");
+console.log(refInfo); // { found: true, tagName: "A", textContent: "..." }
+
+// Click or fill
+await client.click("hackernews", "e2");
+await client.fill("hackernews", "e10", "search query");
 ```
 
 ## Error Recovery
@@ -221,16 +251,22 @@ Page state persists after failures. Debug with:
 
 ```bash
 cd skills/dev-browser && npx tsx <<'EOF'
-import { connect } from "@/client.js";
+import { connectLite } from "@/client-lite.js";
+import { writeFileSync } from "fs";
 
-const client = await connect();
-const page = await client.page("hackernews");
+const client = await connectLite();
+await client.page("hackernews");
 
-await page.screenshot({ path: "tmp/debug.png" });
+const shot = await client.screenshot("hackernews");
+writeFileSync("tmp/debug.png", Buffer.from(shot.screenshot, "base64"));
+
+const info = await client.getInfo("hackernews");
+const bodyText = await client.evaluate("hackernews", "document.body.innerText.slice(0, 200)");
+
 console.log({
-  url: page.url(),
-  title: await page.title(),
-  bodyText: await page.textContent("body").then((t) => t?.slice(0, 200)),
+  url: info.url,
+  title: info.title,
+  bodyText,
 });
 
 await client.disconnect();

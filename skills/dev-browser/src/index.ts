@@ -10,6 +10,7 @@ import type {
   ListPagesResponse,
   ServerInfoResponse,
 } from "./types";
+import { registerPageRoutes, type PageEntry } from "./http-routes.js";
 import {
   loadConfig,
   findAvailablePort,
@@ -131,12 +132,6 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   const wsEndpoint = cdpInfo.webSocketDebuggerUrl;
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
 
-  // Registry entry type for page tracking
-  interface PageEntry {
-    page: Page;
-    targetId: string;
-  }
-
   // Registry: name -> PageEntry
   const registry = new Map<string, PageEntry>();
 
@@ -172,7 +167,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   // POST /pages - get or create page
   app.post("/pages", async (req: Request, res: Response) => {
     const body = req.body as GetPageRequest;
-    const { name, viewport } = body;
+    const { name } = body;
 
     if (!name || typeof name !== "string") {
       res.status(400).json({ error: "name is required and must be a string" });
@@ -194,12 +189,6 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     if (!entry) {
       // Create new page in the persistent context (with timeout to prevent hangs)
       const page = await withTimeout(context.newPage(), 30000, "Page creation timed out after 30s");
-
-      // Apply viewport if provided
-      if (viewport) {
-        await page.setViewportSize(viewport);
-      }
-
       const targetId = await getTargetId(page);
       entry = { page, targetId };
       registry.set(name, entry);
@@ -210,7 +199,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       });
     }
 
-    const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId };
+    const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId, mode: "launch" };
     res.json(response);
   });
 
@@ -228,6 +217,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
     res.status(404).json({ error: "page not found" });
   });
+
+  // Register shared page operation routes (navigate, evaluate, snapshot, click, fill, etc.)
+  registerPageRoutes(app, registry);
 
   // Start the server
   const server = app.listen(port, () => {
