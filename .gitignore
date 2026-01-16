@@ -35,6 +35,7 @@ coverage/
 # Temporary files
 tmp/
 temp/
+.npm-install-hash
 
 # Browser profiles
 profiles/
