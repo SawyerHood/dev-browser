@@ -80,6 +80,38 @@ To skip permission prompts, add to `~/.claude/settings.json`:
 
 Or run with `claude --dangerously-skip-permissions` (skips all prompts).
 
+## Configuration
+
+Browser settings are configured in a `config.json` file. Dev Browser searches for this file in order:
+
+1. `DEV_BROWSER_CONFIG` environment variable (explicit path)
+2. `.dev-browser/config.json` in current directory or any parent (project config)
+3. `$XDG_CONFIG_HOME/dev-browser/config.json` (default: `~/.config/dev-browser/`)
+4. `~/.dev-browser/config.json` (legacy)
+
+**Example config:**
+
+```json
+{
+  "cdpPort": 9223,
+  "browser": {
+    "mode": "auto",
+    "path": "/usr/bin/google-chrome"
+  }
+}
+```
+
+| Setting | Description |
+|---------|-------------|
+| `cdpPort` | Chrome DevTools Protocol port (default: 9223) |
+| `browser.mode` | `"auto"`, `"external"`, or `"standalone"` |
+| `browser.path` | Path to Chrome executable |
+| `browser.userDataDir` | Browser profile directory (optional) |
+
+**Project-level config:** Place `.dev-browser/config.json` in your project root to share browser settings with your team or use different settings per project.
+
+**Containers/CI:** Set `DEV_BROWSER_CONFIG=/path/to/config.json` to specify an explicit config path.
+
 ## Usage
 
 Just ask Claude to interact with your browser:
