@@ -105,6 +105,31 @@ State files (like `active-servers.json`) are stored separately from config:
 2. `~/.local/state/dev-browser/` if it exists
 3. `~/.dev-browser/` (legacy fallback)
 
+#### Browser Profile Behavior
+
+Dev-browser uses a dedicated profile directory by default (`$XDG_STATE_HOME/dev-browser/chrome-profile`). This ensures:
+
+- **Predictable behavior** - Works the same in all environments
+- **CDP compatibility** - Chrome requires a non-default profile for remote debugging on Linux
+- **Isolation** - Automation doesn't interfere with your regular browsing
+
+**To use your existing browser profile** (for logged-in sessions, extensions, etc.):
+
+```json
+{
+  "browser": {
+    "userDataDir": "/path/to/your/chrome/profile"
+  }
+}
+```
+
+Common profile locations:
+- **macOS**: `~/Library/Application Support/Google/Chrome`
+- **Linux**: `~/.config/google-chrome`
+- **Windows**: `%LOCALAPPDATA%\Google\Chrome\User Data`
+
+**Note**: Using your default profile may cause conflicts if Chrome is already running.
+
 #### Environment Variable Override
 
 Set `DEV_BROWSER_CONFIG` to explicitly specify a config file path:
