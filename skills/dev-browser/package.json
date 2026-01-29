@@ -1,6 +1,13 @@
 {
   "name": "dev-browser",
   "version": "0.0.1",
+  "files": [
+    "src/",
+    "references/",
+    "SKILL.md",
+    "server.sh",
+    "package.json"
+  ],
   "type": "module",
   "imports": {
     "@/*": "./src/*"
