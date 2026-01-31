@@ -86,9 +86,23 @@ export interface SetStateMessage {
   isActive: boolean;
 }
 
+export interface GetRelayUrlMessage {
+  type: "getRelayUrl";
+}
+
+export interface SetRelayUrlMessage {
+  type: "setRelayUrl";
+  relayUrl: string;
+}
+
 export interface StateResponse {
   isActive: boolean;
   isConnected: boolean;
+  relayUrl?: string;
 }
 
-export type PopupMessage = GetStateMessage | SetStateMessage;
+export interface RelayUrlResponse {
+  relayUrl: string;
+}
+
+export type PopupMessage = GetStateMessage | SetStateMessage | GetRelayUrlMessage | SetRelayUrlMessage;

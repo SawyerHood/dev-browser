@@ -4,14 +4,15 @@
 
 import type { Logger } from "../utils/logger";
 import type { ExtensionCommandMessage, ExtensionResponseMessage } from "../utils/types";
+import { DEFAULT_RELAY_URL, wsUrlToHttpUrl } from "../utils/constants";
 
-const RELAY_URL = "ws://localhost:9222/extension";
 const RECONNECT_INTERVAL = 3000;
 
 export interface ConnectionManagerDeps {
   logger: Logger;
   onMessage: (message: ExtensionCommandMessage) => Promise<unknown>;
   onDisconnect: () => void;
+  getRelayUrl?: () => Promise<string>;
 }
 
 export class ConnectionManager {
@@ -21,11 +22,13 @@ export class ConnectionManager {
   private logger: Logger;
   private onMessage: (message: ExtensionCommandMessage) => Promise<unknown>;
   private onDisconnect: () => void;
+  private getRelayUrl: () => Promise<string>;
 
   constructor(deps: ConnectionManagerDeps) {
     this.logger = deps.logger;
     this.onMessage = deps.onMessage;
     this.onDisconnect = deps.onDisconnect;
+    this.getRelayUrl = deps.getRelayUrl ?? (async () => DEFAULT_RELAY_URL);
   }
 
   /**
@@ -44,9 +47,13 @@ export class ConnectionManager {
       return false;
     }
 
+    // Get the HTTP URL from the WebSocket URL
+    const relayUrl = await this.getRelayUrl();
+    const httpUrl = wsUrlToHttpUrl(relayUrl);
+
     // Verify server is actually reachable
     try {
-      const response = await fetch("http://localhost:9222", {
+      const response = await fetch(httpUrl, {
         method: "HEAD",
         signal: AbortSignal.timeout(1000),
       });
@@ -131,20 +138,40 @@ export class ConnectionManager {
   }
 
   /**
+   * Force reconnect with new relay URL.
+   */
+  async reconnect(): Promise<void> {
+    if (this.ws) {
+      // Remove handlers before closing to prevent onDisconnect side effects
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.onmessage = null;
+      this.ws.close();
+      this.ws = null;
+    }
+    if (this.shouldMaintain) {
+      await this.tryConnect();
+    }
+  }
+
+  /**
    * Try to connect to relay server once.
    */
   private async tryConnect(): Promise<void> {
     if (this.isConnected()) return;
 
+    const relayUrl = await this.getRelayUrl();
+    const httpUrl = wsUrlToHttpUrl(relayUrl);
+
     // Check if server is available
     try {
-      await fetch("http://localhost:9222", { method: "HEAD" });
+      await fetch(httpUrl, { method: "HEAD" });
     } catch {
       return;
     }
 
-    this.logger.debug("Connecting to relay server...");
-    const socket = new WebSocket(RELAY_URL);
+    this.logger.debug(`Connecting to relay server at ${relayUrl}...`);
+    const socket = new WebSocket(relayUrl);
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -169,7 +196,7 @@ export class ConnectionManager {
 
     this.ws = socket;
     this.setupSocketHandlers(socket);
-    this.logger.log("Connected to relay server");
+    this.logger.log(`Connected to relay server at ${relayUrl}`);
   }
 
   /**
