@@ -17,6 +17,15 @@
         <span id="status-text">Inactive</span>
       </div>
       <p id="connection-status" class="connection-status"></p>
+
+      <div class="settings-section">
+        <label for="relay-url" class="settings-label">Relay Server URL</label>
+        <div class="url-input-row">
+          <input type="text" id="relay-url" placeholder="ws://localhost:9222/extension" />
+          <button id="save-url" class="save-btn">Save</button>
+        </div>
+        <p id="url-status" class="url-status"></p>
+      </div>
     </div>
     <script type="module" src="./main.ts"></script>
   </body>

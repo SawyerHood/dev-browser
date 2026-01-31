@@ -10,7 +10,7 @@ import { TabManager } from "../services/TabManager";
 import { ConnectionManager } from "../services/ConnectionManager";
 import { CDPRouter } from "../services/CDPRouter";
 import { StateManager } from "../services/StateManager";
-import type { PopupMessage, StateResponse } from "../utils/types";
+import type { PopupMessage, StateResponse, RelayUrlResponse } from "../utils/types";
 
 export default defineBackground(() => {
   // Create connection manager first (needed for sendMessage)
@@ -34,11 +34,12 @@ export default defineBackground(() => {
     tabManager,
   });
 
-  // Create connection manager
+  // Create connection manager with relay URL from state
   connectionManager = new ConnectionManager({
     logger,
     onMessage: (msg) => cdpRouter.handleCommand(msg),
     onDisconnect: () => tabManager.detachAll(),
+    getRelayUrl: () => stateManager.getRelayUrl(),
   });
 
   // Keep-alive alarm name for Chrome Alarms API
@@ -61,6 +62,16 @@ export default defineBackground(() => {
       connectionManager.disconnect();
     }
     updateBadge(isActive);
+  }
+
+  // Handle relay URL changes
+  async function handleRelayUrlChange(relayUrl: string): Promise<void> {
+    await stateManager.setRelayUrl(relayUrl);
+    // Reconnect with new URL if active
+    const state = await stateManager.getState();
+    if (state.isActive) {
+      await connectionManager.reconnect();
+    }
   }
 
   // Handle debugger events
@@ -88,7 +99,7 @@ export default defineBackground(() => {
     (
       message: PopupMessage,
       _sender: chrome.runtime.MessageSender,
-      sendResponse: (response: StateResponse) => void
+      sendResponse: (response: StateResponse | RelayUrlResponse) => void
     ) => {
       if (message.type === "getState") {
         (async () => {
@@ -111,6 +122,32 @@ export default defineBackground(() => {
             isActive: state.isActive,
             isConnected,
           });
+        })();
+        return true; // Async response
+      }
+
+      if (message.type === "getRelayUrl") {
+        (async () => {
+          try {
+            const relayUrl = await stateManager.getRelayUrl();
+            sendResponse({ relayUrl });
+          } catch (error) {
+            logger.debug("Error getting relay URL:", error);
+            sendResponse({ relayUrl: "" });
+          }
+        })();
+        return true; // Async response
+      }
+
+      if (message.type === "setRelayUrl") {
+        (async () => {
+          try {
+            await handleRelayUrlChange(message.relayUrl);
+            sendResponse({ relayUrl: message.relayUrl });
+          } catch (error) {
+            logger.debug("Error setting relay URL:", error);
+            sendResponse({ relayUrl: "" });
+          }
         })();
         return true; // Async response
       }

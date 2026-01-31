@@ -11,7 +11,7 @@ body {
 }
 
 .popup {
-  width: 200px;
+  width: 280px;
   padding: 16px;
 }
 
@@ -93,4 +93,72 @@ input:checked + .slider::before {
 
 .connection-status.connecting {
   color: #ff9800;
+}
+
+/* Settings section */
+.settings-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #eee;
+}
+
+.settings-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.url-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+#relay-url {
+  flex: 1;
+  padding: 8px;
+  font-size: 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  outline: none;
+}
+
+#relay-url:focus {
+  border-color: #4caf50;
+}
+
+.save-btn {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  background-color: #4caf50;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.save-btn:hover {
+  background-color: #43a047;
+}
+
+.save-btn:active {
+  background-color: #388e3c;
+}
+
+.url-status {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #888;
+  min-height: 14px;
+}
+
+.url-status.saved {
+  color: #4caf50;
+}
+
+.url-status.error {
+  color: #f44336;
 }
