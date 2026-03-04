@@ -94,17 +94,14 @@ async function getCdpEndpoint(cdpPort: number, maxRetries = 60): Promise<string>
  * On macOS, if browserPath ends with .app (an app bundle), uses `open -a`
  * for proper Dock icon integration. The app should handle CDP flags internally.
  */
-function launchBrowserDetached(
-  browserPath: string,
-  cdpPort: number,
-  userDataDir?: string
-): void {
+function launchBrowserDetached(browserPath: string, cdpPort: number, userDataDir?: string): void {
   // On macOS, if path is an app bundle, use `open -a` for proper Dock icon
   if (process.platform === "darwin" && browserPath.endsWith(".app")) {
     console.log(`Launching macOS app: ${browserPath}`);
     console.log(`  (App handles CDP port and user data dir internally)`);
 
-    const child = spawn("open", ["-a", browserPath], {
+    // -g prevents bringing the app to the foreground (no focus stealing)
+    const child = spawn("open", ["-g", "-a", browserPath], {
       detached: true,
       stdio: "ignore",
     });
@@ -167,7 +164,7 @@ export async function serveWithExternalBrowser(
   const config = loadConfig();
 
   // Use dynamic port allocation if port not specified
-  const port = options.port ?? await findAvailablePort(config);
+  const port = options.port ?? (await findAvailablePort(config));
   const cdpPort = options.cdpPort ?? config.cdpPort;
   const autoLaunch = options.autoLaunch ?? true;
   const browserPath = options.browserPath;
@@ -196,12 +193,12 @@ export async function serveWithExternalBrowser(
     } else if (autoLaunch && !browserPath) {
       throw new Error(
         `Browser not running on port ${cdpPort} and no browserPath provided for auto-launch. ` +
-        `Either start the browser manually with --remote-debugging-port=${cdpPort} or provide browserPath.`
+          `Either start the browser manually with --remote-debugging-port=${cdpPort} or provide browserPath.`
       );
     } else {
       throw new Error(
         `Browser not running on port ${cdpPort}. ` +
-        `Start it with --remote-debugging-port=${cdpPort}`
+          `Start it with --remote-debugging-port=${cdpPort}`
       );
     }
   } else {
@@ -220,7 +217,7 @@ export async function serveWithExternalBrowser(
 
   // Get the default context (user's browsing context)
   const contexts = browser.contexts();
-  const context: BrowserContext = contexts[0] || await browser.newContext();
+  const context: BrowserContext = contexts[0] || (await browser.newContext());
 
   // Registry: name -> PageEntry
   const registry = new Map<string, PageEntry>();
@@ -311,7 +308,12 @@ export async function serveWithExternalBrowser(
       });
     }
 
-    const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId, mode: "launch" };
+    const response: GetPageResponse = {
+      wsEndpoint,
+      name,
+      targetId: entry.targetId,
+      mode: "launch",
+    };
     res.json(response);
   });
 
@@ -408,7 +410,7 @@ export async function serveWithExternalBrowser(
     const remainingServers = unregisterServer(port);
     console.log(
       `Server stopped. Browser remains open. ` +
-      `${remainingServers} other server(s) still running.`
+        `${remainingServers} other server(s) still running.`
     );
   };
 
