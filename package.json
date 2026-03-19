@@ -1,19 +1,40 @@
 {
-  "name": "browser-skill",
+  "name": "dev-browser",
+  "version": "0.1.0",
+  "description": "CLI for controlling browsers with sandboxed JavaScript scripts",
   "type": "module",
-  "private": true,
-  "devDependencies": {
-    "husky": "^9.1.7",
-    "lint-staged": "^16.2.7",
-    "prettier": "^3.7.4",
-    "typescript": "^5"
+  "bin": {
+    "dev-browser": "./bin/dev-browser.js"
   },
   "scripts": {
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "prepare": "husky"
+    "postinstall": "node scripts/postinstall.js",
+    "version:sync": "node scripts/sync-version.js",
+    "version": "npm run version:sync && git add cli/Cargo.toml cli/Cargo.lock"
   },
-  "lint-staged": {
-    "*.{js,ts,tsx,json,md,yml,yaml}": "prettier --write"
-  }
+  "files": [
+    "bin/",
+    "scripts/",
+    "daemon/dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "playwright": "^1.52.0",
+    "playwright-core": "^1.52.0",
+    "quickjs-emscripten": "^0.32.0"
+  },
+  "keywords": [
+    "browser",
+    "automation",
+    "playwright",
+    "cli",
+    "sandbox",
+    "quickjs"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SawyerHood/dev-browser-new"
+  },
+  "author": "Sawyer Hood"
 }

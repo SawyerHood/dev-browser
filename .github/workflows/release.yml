@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-binaries:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            binary: dev-browser-darwin-arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            binary: dev-browser-darwin-x64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: dev-browser-linux-x64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: dev-browser-linux-arm64
+            cross: true
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            binary: dev-browser-linux-musl-x64
+            cross: true
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install cross (if needed)
+        if: matrix.cross
+        run: cargo install cross
+      - name: Build
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} --manifest-path cli/Cargo.toml
+          else
+            cargo build --release --target ${{ matrix.target }} --manifest-path cli/Cargo.toml
+          fi
+      - name: Rename binary
+        run: cp cli/target/${{ matrix.target }}/release/dev-browser ${{ matrix.binary }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: ${{ matrix.binary }}
+
+  publish:
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+      - run: cd daemon && pnpm install && pnpm run bundle && pnpm run bundle:sandbox-client
+      - run: |
+          mkdir -p dist/bin dist/scripts dist/daemon/dist
+          cp bin/dev-browser.js dist/bin/
+          cp scripts/postinstall.js dist/scripts/
+          cp scripts/sync-version.js dist/scripts/ 2>/dev/null || true
+          cp daemon/dist/daemon.bundle.mjs dist/daemon/dist/
+          cp daemon/dist/sandbox-client.js dist/daemon/dist/
+          cp package.json dist/
+          cp README.md dist/
+          cp LICENSE dist/ 2>/dev/null || true
+      - run: cd dist && npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
