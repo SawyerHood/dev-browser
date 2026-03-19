@@ -12,7 +12,6 @@ A browser automation tool that lets AI agents and developers control browsers wi
 - **Persistent pages** - Navigate once, interact across multiple scripts
 - **Auto-connect** - Connect to your running Chrome or launch a fresh Chromium
 - **Full Playwright API** - goto, click, fill, locators, evaluate, screenshots, and more
-- **Zero startup cost** - Rust CLI binary, Node daemon runs in the background
 
 ## CLI Installation
 
