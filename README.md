@@ -81,8 +81,6 @@ browser.getPage(nameOrId)    // Get/create named page, or connect to tab by targ
 browser.newPage()            // Create anonymous page (cleaned up after script)
 browser.listPages()          // List all tabs: [{id, url, title, name}]
 browser.closePage(name)      // Close a named page
-browser.snapshot(nameOrId?)  // Get a page's YAML accessibility snapshot
-snapshot(nameOrId?)          // Same as browser.snapshot(); omit only when unambiguous
 
 // File I/O (restricted to ~/.dev-browser/tmp/)
 await saveScreenshot(buf, name)   // Save screenshot buffer, returns path
@@ -93,7 +91,7 @@ await readFile(name)              // Read file, returns content
 console.log/warn/error/info       // Routed to CLI stdout/stderr
 ```
 
-Pages are full [Playwright Page objects](https://playwright.dev/docs/api/class-page) — `goto`, `click`, `fill`, `locator`, `evaluate`, `screenshot`, and everything else.
+Pages are full [Playwright Page objects](https://playwright.dev/docs/api/class-page) — `goto`, `click`, `fill`, `locator`, `evaluate`, `screenshot`, and everything else, including `page.snapshotForAI({ track?, depth?, timeout? })`, which returns `{ full, incremental? }` for AI-friendly page snapshots.
 
 ## Benchmarks
 
