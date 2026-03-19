@@ -10,12 +10,20 @@
       "source": "./",
       "description": "Browser automation skill with persistent page state for developers and AI agents",
       "strict": false,
-      "keywords": ["browser", "playwright", "automation", "testing", "debugging"],
-      "skills": ["./skills/dev-browser"]
+      "keywords": [
+        "browser",
+        "playwright",
+        "automation",
+        "testing",
+        "debugging"
+      ],
+      "skills": [
+        "./skills/dev-browser"
+      ]
     }
   ],
   "metadata": {
     "description": "Marketplace for the dev-browser skill",
-    "version": "0.2.0"
+    "version": "0.2.1"
   }
 }
