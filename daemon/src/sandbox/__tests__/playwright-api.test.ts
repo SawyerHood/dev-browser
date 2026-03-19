@@ -716,6 +716,44 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
+  describe.sequential("accessibility snapshots", () => {
+    const browserName = "playwright-snapshots";
+    let harness: JsonSandboxHarness;
+
+    beforeAll(async () => {
+      harness = await createSandboxHarness(manager, browserName);
+    }, 180_000);
+
+    afterAll(async () => {
+      await harness.dispose();
+      await manager.stopBrowser(browserName);
+    }, 180_000);
+
+    it("supports ariaSnapshot() and sandbox snapshot helpers", async () => {
+      const result = await harness.runJson<{
+        directSnapshot: string;
+        browserSnapshot: string;
+        globalSnapshot: string;
+      }>(
+        withTestPage(
+          "snapshot-main",
+          `
+          console.log(JSON.stringify({
+            directSnapshot: await page.locator("body").ariaSnapshot(),
+            browserSnapshot: await browser.snapshot("snapshot-main"),
+            globalSnapshot: await snapshot(),
+          }));
+        `
+        )
+      );
+
+      expect(result.browserSnapshot).toBe(result.directSnapshot);
+      expect(result.globalSnapshot).toBe(result.directSnapshot);
+      expect(result.directSnapshot).toContain('heading "Hello World"');
+      expect(result.directSnapshot).toContain('button "Submit"');
+    });
+  });
+
   describe.sequential("screenshots and input devices", () => {
     const browserName = "playwright-media-input";
     let harness: JsonSandboxHarness;

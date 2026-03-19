@@ -3,7 +3,7 @@ import util from "node:util";
 
 import type { Page } from "playwright";
 
-import type { BrowserManager } from "../browser-manager.js";
+import type { BrowserManager, BrowserPageSummary } from "../browser-manager.js";
 import {
   ensureDevBrowserTempDir,
   readDevBrowserTempFile,
@@ -124,6 +124,14 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
+function requireOptionalString(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  return requireString(value, label);
+}
+
 function toServerImpl<T>(clientObject: unknown, label: string): T {
   const connection = (clientObject as { _connection?: { toImpl?: (value: unknown) => unknown } })
     ._connection;
@@ -210,6 +218,7 @@ export class QuickJSSandbox {
           newPage: () => this.#newPage(),
           listPages: () => this.#options.manager.listPages(this.#options.browserName),
           closePage: (name) => this.#closePage(name),
+          snapshot: (nameOrId) => this.#snapshot(nameOrId),
           saveScreenshot: (name, data) => this.#writeTempFile(name, data),
           writeFile: (name, data) => this.#writeTempFile(name, data),
           readFile: (name) => this.#readTempFile(name),
@@ -450,6 +459,13 @@ export class QuickJSSandbox {
             return (async () => {
               await connection.initializePlaywright();
 
+              const snapshotPage = async (nameOrId) => {
+                return await hostCall(
+                  "snapshot",
+                  JSON.stringify(nameOrId === undefined ? [] : [nameOrId]),
+                );
+              };
+
               const browserApi = Object.create(null);
               Object.defineProperties(browserApi, {
                 getPage: {
@@ -475,6 +491,12 @@ export class QuickJSSandbox {
                 closePage: {
                   value: async (name) => {
                     await hostCall("closePage", JSON.stringify([name]));
+                  },
+                  enumerable: true,
+                },
+                snapshot: {
+                  value: async (nameOrId) => {
+                    return await snapshotPage(nameOrId);
                   },
                   enumerable: true,
                 },
@@ -514,6 +536,14 @@ export class QuickJSSandbox {
                 readFile: {
                   value: async (name) => {
                     return await hostCall("readFile", JSON.stringify([name]));
+                  },
+                  configurable: false,
+                  enumerable: true,
+                  writable: false,
+                },
+                snapshot: {
+                  value: async (nameOrId) => {
+                    return await snapshotPage(nameOrId);
                   },
                   configurable: false,
                   enumerable: true,
@@ -690,6 +720,11 @@ export class QuickJSSandbox {
     );
   }
 
+  async #snapshot(nameOrId: unknown): Promise<string> {
+    const page = await this.#resolveSnapshotPage(nameOrId);
+    return await page.locator("body").ariaSnapshot();
+  }
+
   async #writeTempFile(name: unknown, payload: unknown): Promise<string> {
     return await writeDevBrowserTempFile(
       requireString(name, "File name"),
@@ -699,6 +734,67 @@ export class QuickJSSandbox {
 
   async #readTempFile(name: unknown): Promise<string> {
     return await readDevBrowserTempFile(requireString(name, "File name"));
+  }
+
+  async #resolveSnapshotPage(nameOrId: unknown): Promise<Page> {
+    const requestedPage = requireOptionalString(nameOrId, "Page name or targetId");
+    const pageSummaries = await this.#options.manager.listPages(this.#options.browserName);
+
+    if (requestedPage !== undefined) {
+      const matchingPage = pageSummaries.find(
+        (summary) => summary.id === requestedPage || summary.name === requestedPage
+      );
+      if (!matchingPage) {
+        throw new Error(
+          `Page "${requestedPage}" not found. Run browser.listPages() to choose a valid page name or targetId.`
+        );
+      }
+      return await this.#options.manager.getPage(
+        this.#options.browserName,
+        matchingPage.name ?? matchingPage.id
+      );
+    }
+
+    const defaultPage = this.#resolveDefaultSnapshotPage(pageSummaries);
+    return await this.#options.manager.getPage(
+      this.#options.browserName,
+      defaultPage.name ?? defaultPage.id
+    );
+  }
+
+  #resolveDefaultSnapshotPage(pageSummaries: BrowserPageSummary[]): BrowserPageSummary {
+    if (pageSummaries.length === 0) {
+      throw new Error(
+        'snapshot() could not find any open pages. Open one first with browser.getPage("name") or browser.newPage().'
+      );
+    }
+
+    const namedPageSummaries = pageSummaries.filter(
+      (summary): summary is BrowserPageSummary & { name: string } => summary.name !== null
+    );
+    if (namedPageSummaries.length === 1) {
+      const [namedPageSummary] = namedPageSummaries;
+      if (!namedPageSummary) {
+        throw new Error("snapshot() could not resolve the only named page.");
+      }
+      return namedPageSummary;
+    }
+
+    if (pageSummaries.length === 1) {
+      const [pageSummary] = pageSummaries;
+      if (!pageSummary) {
+        throw new Error("snapshot() could not resolve the only open page.");
+      }
+      return pageSummary;
+    }
+
+    if (pageSummaries.length > 1) {
+      throw new Error(
+        `snapshot() requires a page name or targetId when ${pageSummaries.length} pages are open. Run browser.listPages() to inspect the available pages.`
+      );
+    }
+
+    throw new Error("snapshot() could not resolve a default page.");
   }
 
   async #cleanupAnonymousPages(options: { suppressErrors?: boolean } = {}): Promise<void> {

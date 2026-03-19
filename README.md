@@ -81,6 +81,8 @@ browser.getPage(nameOrId)    // Get/create named page, or connect to tab by targ
 browser.newPage()            // Create anonymous page (cleaned up after script)
 browser.listPages()          // List all tabs: [{id, url, title, name}]
 browser.closePage(name)      // Close a named page
+browser.snapshot(nameOrId?)  // Get a page's YAML accessibility snapshot
+snapshot(nameOrId?)          // Same as browser.snapshot(); omit only when unambiguous
 
 // File I/O (restricted to ~/.dev-browser/tmp/)
 await saveScreenshot(buf, name)   // Save screenshot buffer, returns path

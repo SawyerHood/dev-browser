@@ -34,6 +34,7 @@ SANDBOX ENVIRONMENT:
     browser                    Pre-connected browser handle (see API below)
     console                    log, warn, error, info (routed to CLI output)
     setTimeout / clearTimeout  Basic timers
+    snapshot(nameOrId?)        Get a YAML accessibility snapshot for a page
     saveScreenshot(buf, name)  Save a screenshot buffer (async, must be awaited)
     writeFile(name, data)      Write a file to temp dir (async, must be awaited)
     readFile(name)             Read a file from temp dir (async, must be awaited)
@@ -65,6 +66,9 @@ Script API available inside every script:
   browser.listPages()       List all tabs: named pages and existing browser tabs.
                             Returns [{id, url, title, name}].
   browser.closePage(name) Close and remove a named page.
+  browser.snapshot(nameOrId?) Get a page's YAML accessibility snapshot.
+                            Omit nameOrId when one named page or one total page is open.
+  await snapshot(nameOrId?) Get the same YAML accessibility snapshot as browser.snapshot().
   await saveScreenshot(buf: Buffer, name: string): Promise<string>
                           Save a screenshot buffer to ~/.dev-browser/tmp/<name>.
                           Returns the full path to the saved file.
@@ -114,12 +118,14 @@ const CLI_AFTER_LONG_HELP: &str = r####"LLM USAGE GUIDE:
   ARIA snapshots for element discovery:
     dev-browser <<'EOF'
     const page = await browser.getPage("main");
-    const snapshot = await page._snapshotForAI();
-    console.log(snapshot);
-    // Read the role/name/[ref=eN] lines to identify the right element.
+    const yaml = await snapshot("main");
+    console.log(yaml);
+    // Or call Playwright directly:
+    // console.log(await page.locator("body").ariaSnapshot());
+    // Read the role/name lines to identify the right element.
     // Then interact with it using a locator from that line:
     // await page.getByRole("button", { name: "Continue" }).click();
-    // Re-run page._snapshotForAI() after the page changes to get fresh refs.
+    // Re-run snapshot("main") after the page changes to get fresh structure.
     EOF
 
   Screenshots for visual state:
@@ -158,7 +164,9 @@ const CLI_AFTER_LONG_HELP: &str = r####"LLM USAGE GUIDE:
     page.goto(url)                         Navigate to a URL
     page.title()                           Get the current page title
     page.url()                             Get the current URL
-    page._snapshotForAI()                  Get an LLM-friendly accessibility snapshot with roles/names/refs
+    browser.snapshot(nameOrId?)            Get a YAML accessibility snapshot for a page
+    snapshot(nameOrId?)                    Same as browser.snapshot(...)
+    page.locator("body").ariaSnapshot()    Direct Playwright accessibility snapshot
     page.getByRole(role, { name })         Target elements discovered from the snapshot
     page.textContent(selector)             Get the text content of an element
     page.innerHTML(selector)               Get the inner HTML of an element
@@ -194,7 +202,7 @@ const CLI_AFTER_LONG_HELP: &str = r####"LLM USAGE GUIDE:
 
   Tips:
     - Use console.log(JSON.stringify(...)) for structured output.
-    - Prefer page._snapshotForAI() for structure; use screenshots when visual layout or styling matters.
+    - Prefer snapshot() for structure; use screenshots when visual layout or styling matters.
     - Keep page names stable across scripts so you can resume work after failures.
     - Each --browser name maps to a separate daemon-managed browser instance.
     - Use --connect to attach to an existing browser; omit the URL to auto-discover Chrome with debugging enabled.

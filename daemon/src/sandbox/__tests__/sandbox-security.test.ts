@@ -167,8 +167,9 @@ describe.sequential("QuickJS sandbox security", () => {
     expect(payload.globals).not.toContain("__createPlaywrightClient");
     expect(payload.globals).toContain("readFile");
     expect(payload.globals).toContain("saveScreenshot");
+    expect(payload.globals).toContain("snapshot");
     expect(payload.globals).toContain("writeFile");
-    expect(payload.browserKeys).toEqual(["closePage", "getPage", "listPages", "newPage"]);
+    expect(payload.browserKeys).toEqual(["closePage", "getPage", "listPages", "newPage", "snapshot"]);
     expect(payload.browserHasNullPrototype).toBe(true);
   }, 120_000);
 
