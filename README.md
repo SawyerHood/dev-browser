@@ -2,6 +2,8 @@
   <img src="assets/header.png" alt="Dev Browser - Browser automation for Claude Code" width="100%">
 </p>
 
+Brought to you by [Do Browser](https://dobrowser.io).
+
 A browser automation tool that lets AI agents and developers control browsers with sandboxed JavaScript scripts.
 
 **Key features:**
@@ -18,6 +20,8 @@ A browser automation tool that lets AI agents and developers control browsers wi
 npm install -g dev-browser
 dev-browser install    # installs Playwright + Chromium
 ```
+
+> Windows is not currently supported.
 
 ### Quick start
 
@@ -89,17 +93,6 @@ console.log/warn/error/info       // Routed to CLI stdout/stderr
 ```
 
 Pages are full [Playwright Page objects](https://playwright.dev/docs/api/class-page) — `goto`, `click`, `fill`, `locator`, `evaluate`, `screenshot`, and everything else.
-
-## Architecture
-
-```
-Rust CLI → Unix socket → Node.js daemon → QuickJS WASM sandbox → Playwright → Browser
-```
-
-- **Rust CLI** — near-instant startup, auto-starts the daemon
-- **Node.js daemon** — manages browser instances, persists between runs
-- **QuickJS sandbox** — scripts can't access filesystem, network, or host process
-- **Playwright** — drives Chromium via CDP
 
 ## Benchmarks
 
