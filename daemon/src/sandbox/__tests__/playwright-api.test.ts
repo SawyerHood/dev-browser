@@ -716,7 +716,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("accessibility snapshots", () => {
+  describe.sequential("AI snapshots", () => {
     const browserName = "playwright-snapshots";
     let harness: JsonSandboxHarness;
 
@@ -729,28 +729,23 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
       await manager.stopBrowser(browserName);
     }, 180_000);
 
-    it("supports ariaSnapshot() and sandbox snapshot helpers", async () => {
+    it("supports page.snapshotForAI()", async () => {
       const result = await harness.runJson<{
-        directSnapshot: string;
-        browserSnapshot: string;
-        globalSnapshot: string;
+        full: string;
+        incremental?: string;
       }>(
         withTestPage(
           "snapshot-main",
           `
-          console.log(JSON.stringify({
-            directSnapshot: await page.locator("body").ariaSnapshot(),
-            browserSnapshot: await browser.snapshot("snapshot-main"),
-            globalSnapshot: await snapshot(),
-          }));
+          const result = await page.snapshotForAI();
+          console.log(JSON.stringify(result));
         `
         )
       );
 
-      expect(result.browserSnapshot).toBe(result.directSnapshot);
-      expect(result.globalSnapshot).toBe(result.directSnapshot);
-      expect(result.directSnapshot).toContain('heading "Hello World"');
-      expect(result.directSnapshot).toContain('button "Submit"');
+      expect(result.incremental).toBeUndefined();
+      expect(result.full).toContain('heading "Hello World"');
+      expect(result.full).toContain('button "Submit"');
     });
   });
 
