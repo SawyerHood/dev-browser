@@ -1,0 +1,8 @@
+name: dev-browser
+version: 1.0.0
+description: Browser automation for Claude Code. Control your browser to test and verify your work as you develop.
+author: Sawyer Hood
+license: MIT
+
+includes:
+  - skills/dev-browser/**/*
