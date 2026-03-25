@@ -152,6 +152,10 @@ Pages are full [Playwright Page objects](https://playwright.dev/docs/api/class-p
 
 _See [dev-browser-eval](https://github.com/SawyerHood/dev-browser-eval) for methodology._
 
+## Related Projects
+
+- [Claude Code SDK](https://github.com/SeifBenayed/claude-code-sdk) — Open-source, provider-agnostic SDK (Node.js, Python, Go, Rust) implementing the Claude Code tool loop. Run skills and browser automation on any LLM backend.
+
 ## License
 
 MIT
