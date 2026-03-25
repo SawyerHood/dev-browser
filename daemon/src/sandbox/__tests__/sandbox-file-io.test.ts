@@ -203,14 +203,51 @@ describe.sequential("QuickJS sandbox file I/O", () => {
       "bad\0name.txt",
     ];
 
-    for (const invalidName of invalidNames) {
-      await expectSandboxScriptToThrow(
-        `await writeFile(${JSON.stringify(invalidName)}, "blocked");`
-      );
-      await expectSandboxScriptToThrow(`await readFile(${JSON.stringify(invalidName)});`);
-      await expectSandboxScriptToThrow(
-        `await saveScreenshot(new Uint8Array([1, 2, 3]), ${JSON.stringify(invalidName)});`
-      );
+    const output = await runSandboxScript(`
+      const invalidNames = ${JSON.stringify(invalidNames)};
+      const results = [];
+      const operations = [
+        ["writeFile", async (name) => await writeFile(name, "blocked")],
+        ["readFile", async (name) => await readFile(name)],
+        [
+          "saveScreenshot",
+          async (name) => await saveScreenshot(new Uint8Array([1, 2, 3]), name),
+        ],
+      ];
+
+      for (const invalidName of invalidNames) {
+        for (const [label, operation] of operations) {
+          try {
+            await operation(invalidName);
+            results.push({ invalidName, label, ok: true, message: null });
+          } catch (error) {
+            results.push({
+              invalidName,
+              label,
+              ok: false,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+
+      console.log(JSON.stringify(results));
+    `);
+
+    const results = parseLastJsonLine<
+      Array<{
+        invalidName: string;
+        label: string;
+        ok: boolean;
+        message: string | null;
+      }>
+    >(output);
+
+    expect(results).toHaveLength(invalidNames.length * 3);
+
+    for (const result of results) {
+      expect(result.ok).toBe(false);
+      expect(result.message ?? "").toMatch(INVALID_PATH_ERROR);
     }
   });
 
