@@ -28,25 +28,26 @@ pub fn socket_path() -> io::Result<PathBuf> {
 }
 
 #[cfg(windows)]
-fn daemon_pipe_name() -> String {
-    fn sanitize(value: &str) -> String {
-        let sanitized = value
-            .chars()
-            .map(|character| match character {
-                'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => character,
-                _ => '-',
-            })
-            .collect::<String>()
-            .trim_matches('-')
-            .to_ascii_lowercase();
+fn sanitize_pipe_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| match character {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => character,
+            _ => '-',
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_ascii_lowercase();
 
-        if sanitized.is_empty() {
-            "user".to_string()
-        } else {
-            sanitized
-        }
+    if sanitized.is_empty() {
+        "user".to_string()
+    } else {
+        sanitized
     }
+}
 
+#[cfg(windows)]
+fn daemon_pipe_name() -> String {
     let user = std::env::var("USERNAME")
         .or_else(|_| std::env::var("USER"))
         .ok()
@@ -60,7 +61,7 @@ fn daemon_pipe_name() -> String {
                 .unwrap_or_else(|| "user".to_string())
         });
 
-    format!("dev-browser-daemon-{}", sanitize(&user))
+    format!("dev-browser-daemon-{}", sanitize_pipe_segment(&user))
 }
 
 #[cfg(unix)]

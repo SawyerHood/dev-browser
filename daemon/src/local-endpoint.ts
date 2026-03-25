@@ -3,7 +3,7 @@ import path from "node:path";
 
 function sanitizePipeSegment(value: string): string {
   const sanitized = value
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/[^A-Za-z0-9._-]/g, "-")
     .replace(/^-+|-+$/g, "")
     .toLowerCase();
   return sanitized.length > 0 ? sanitized : "user";

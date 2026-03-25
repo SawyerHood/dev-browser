@@ -94,7 +94,7 @@ pub fn current_daemon_pid() -> Option<i32> {
 pub fn wait_for_daemon_exit(pid: i32, timeout: Duration) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if daemon_pid() != Some(pid) && connect_to_daemon().is_err() {
+        if daemon_has_exited(pid, connect_to_daemon().is_err()) {
             return Ok(());
         }
 
@@ -102,6 +102,10 @@ pub fn wait_for_daemon_exit(pid: i32, timeout: Duration) -> Result<(), Box<dyn E
     }
 
     Err(format!("Daemon failed to stop within {} seconds", timeout.as_secs()).into())
+}
+
+fn daemon_has_exited(_pid: i32, daemon_unreachable: bool) -> bool {
+    daemon_unreachable
 }
 
 fn spawn_daemon(command: &DaemonCommand) -> io::Result<()> {
