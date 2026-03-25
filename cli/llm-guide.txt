@@ -103,7 +103,8 @@ LLM USAGE GUIDE:
       EOF
 
     To launch Chrome with debugging enabled:
-      /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222
+      chrome.exe --remote-debugging-port=9222
+      google-chrome --remote-debugging-port=9222
 
     Or visit chrome://inspect/#remote-debugging to configure.
 

@@ -20,8 +20,6 @@ npm install -g dev-browser
 dev-browser install    # installs Playwright + Chromium
 ```
 
-> Windows is not currently supported.
-
 ### Quick start
 
 ```bash
@@ -38,6 +36,24 @@ const tabs = await browser.listPages();
 console.log(JSON.stringify(tabs, null, 2));
 EOF
 ```
+
+### Windows notes
+
+PowerShell install:
+
+```powershell
+npm install -g dev-browser
+dev-browser install
+```
+
+To attach to a running Chrome instance on Windows:
+
+```powershell
+chrome.exe --remote-debugging-port=9222
+dev-browser --connect
+```
+
+Windows npm installs download the native `dev-browser-windows-x64.exe` release asset during `postinstall`, and the generated npm shims invoke that executable directly.
 
 ### Using with AI agents
 
