@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import {
   mkdtemp,
   readFile as readFileFs,
@@ -9,7 +8,6 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -20,10 +18,8 @@ import {
   resolveDevBrowserTempPath,
 } from "../../temp-files.js";
 import { runScript } from "../script-runner-quickjs.js";
+import { ensureSandboxClientBundle } from "./bundle-test-helpers.js";
 
-const execFileAsync = promisify(execFile);
-const daemonDir = new URL("../../../", import.meta.url);
-const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const browserName = "sandbox-file-io";
 const INVALID_PATH_ERROR =
   /absolute paths are not allowed|null bytes|must not contain|escapes the controlled temp directory|symlink/i;
@@ -72,9 +68,7 @@ describe.sequential("QuickJS sandbox file I/O", () => {
   const cleanupPaths = new Set<string>();
 
   beforeAll(async () => {
-    await execFileAsync(pnpmCommand, ["run", "bundle:sandbox-client"], {
-      cwd: daemonDir,
-    });
+    await ensureSandboxClientBundle();
 
     await ensureDevBrowserTempDir();
 

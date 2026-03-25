@@ -13,8 +13,7 @@ use serde_json::{json, Value};
 use skill::install_skill;
 use std::error::Error;
 use std::fs;
-use std::io::{self, BufReader, Read, Write};
-use std::os::unix::net::UnixStream;
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::process;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -118,7 +117,7 @@ struct Cli {
         default_missing_value = "auto",
         value_name = "URL",
         help = "Connect to a running Chrome instance",
-        long_help = "Connect to a running Chrome instance.\n\nWithout a URL: auto-discovers Chrome with debugging enabled.\nWorks with Chrome's built-in remote debugging\n(chrome://inspect/#remote-debugging) and classic\n--remote-debugging-port mode.\n\nWith a URL: connects to the specified CDP endpoint.\nAccepts HTTP or WebSocket CDP endpoints such as `http://localhost:9222` or `ws://host:9222/devtools/browser/...`.\n\nTo launch Chrome with debugging:\n  /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222\n\nOr visit chrome://inspect/#remote-debugging to configure."
+        long_help = "Connect to a running Chrome instance.\n\nWithout a URL: auto-discovers Chrome with debugging enabled.\nWorks with Chrome's built-in remote debugging\n(chrome://inspect/#remote-debugging) and classic\n--remote-debugging-port mode.\n\nWith a URL: connects to the specified CDP endpoint.\nAccepts HTTP or WebSocket CDP endpoints such as `http://localhost:9222` or `ws://host:9222/devtools/browser/...`.\n\nTo launch Chrome with debugging, use a command such as:\n  chrome.exe --remote-debugging-port=9222\n  google-chrome --remote-debugging-port=9222\n\nOr visit chrome://inspect/#remote-debugging to configure."
     )]
     connect: Option<String>,
 
@@ -327,15 +326,13 @@ fn run_script(cli: &Cli, script: String) -> Result<i32, Box<dyn Error>> {
 
 fn send_request(message: Value, result_mode: ResultMode) -> Result<i32, Box<dyn Error>> {
     let mut stream = connect_to_daemon()?;
-    let reader_stream = stream.try_clone()?;
-    let mut reader = BufReader::new(reader_stream);
-
     send_message(&mut stream, &message)?;
+    let mut reader = BufReader::new(stream);
     stream_responses(&mut reader, result_mode)
 }
 
-fn stream_responses(
-    reader: &mut BufReader<UnixStream>,
+fn stream_responses<R: BufRead>(
+    reader: &mut R,
     result_mode: ResultMode,
 ) -> Result<i32, Box<dyn Error>> {
     loop {
@@ -475,7 +472,7 @@ fn read_script_from_stdin() -> io::Result<String> {
 }
 
 fn stdin_is_tty() -> bool {
-    unsafe { libc::isatty(libc::STDIN_FILENO) == 1 }
+    io::stdin().is_terminal()
 }
 
 fn request_id(prefix: &str) -> String {

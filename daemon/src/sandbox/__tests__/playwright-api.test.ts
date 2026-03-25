@@ -1,20 +1,16 @@
-import { execFile } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { BrowserManager } from "../../browser-manager.js";
 import { QuickJSSandbox } from "../quickjs-sandbox.js";
+import { ensureSandboxClientBundle } from "./bundle-test-helpers.js";
 
-const execFileAsync = promisify(execFile);
-const daemonDir = new URL("../../../", import.meta.url);
-const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const SANDBOX_TIMEOUT_MS = 60_000;
 
 const TEST_PAGE_HTML = String.raw`<!DOCTYPE html>
@@ -324,9 +320,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
   let manager: BrowserManager;
 
   beforeAll(async () => {
-    await execFileAsync(pnpmCommand, ["run", "bundle:sandbox-client"], {
-      cwd: daemonDir,
-    });
+    await ensureSandboxClientBundle();
 
     browserRootDir = await mkdtemp(path.join(os.tmpdir(), "dev-browser-playwright-api-"));
     manager = new BrowserManager(path.join(browserRootDir, "browsers"));

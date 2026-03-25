@@ -1,15 +1,11 @@
-import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { promisify } from "node:util";
 
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { QuickJSHost } from "../quickjs-host.js";
+import { ensureSandboxClientBundle } from "./bundle-test-helpers.js";
 
-const execFileAsync = promisify(execFile);
-const daemonDir = new URL("../../../", import.meta.url);
 const bundleUrl = new URL("../../../dist/sandbox-client.js", import.meta.url);
-const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
 const hosts = new Set<QuickJSHost>();
 
@@ -29,9 +25,7 @@ afterEach(() => {
 });
 
 beforeAll(async () => {
-  await execFileAsync(pnpmCommand, ["run", "bundle:sandbox-client"], {
-    cwd: daemonDir,
-  });
+  await ensureSandboxClientBundle();
   bundleCode = await readFile(bundleUrl, "utf8");
 }, 120_000);
 

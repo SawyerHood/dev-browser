@@ -1,24 +1,29 @@
 import { spawn } from "node:child_process";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { BrowserManager } from "./browser-manager.js";
+import {
+  getBrowsersDir,
+  getDaemonEndpoint,
+  getDevBrowserBaseDir,
+  getPidPath,
+  requiresDaemonEndpointCleanup,
+} from "./local-endpoint.js";
 import { parseRequest, serialize, type ExecuteRequest, type Response } from "./protocol.js";
 import { runScript } from "./sandbox/script-runner-quickjs.js";
 import { ensureDevBrowserTempDir } from "./temp-files.js";
 
-const BASE_DIR = path.join(os.homedir(), ".dev-browser");
-const SOCKET_PATH = path.join(BASE_DIR, "daemon.sock");
-const PID_PATH = path.join(BASE_DIR, "daemon.pid");
-const BROWSERS_DIR = path.join(BASE_DIR, "browsers");
+const BASE_DIR = getDevBrowserBaseDir();
+const SOCKET_PATH = getDaemonEndpoint();
+const PID_PATH = getPidPath();
+const BROWSERS_DIR = getBrowsersDir();
 const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
 const SOCKET_CLOSE_TIMEOUT_MS = 500;
 const EMBEDDED_PACKAGE_JSON = JSON.stringify({
   name: "dev-browser-runtime",
   private: true,
   type: "module",
-  packageManager: "pnpm@10.30.1",
   dependencies: {
     playwright: "^1.52.0",
     "playwright-core": "^1.52.0",
@@ -203,12 +208,13 @@ async function handleInstall(socket: net.Socket, request: { id: string }): Promi
   try {
     await mkdir(BASE_DIR, { recursive: true });
     await writeFile(path.join(BASE_DIR, "package.json"), EMBEDDED_PACKAGE_JSON);
-    await runInstallCommand(output, request.id, "pnpm", ["install"], BASE_DIR, "pnpm install");
+    const npmProgram = process.platform === "win32" ? "npm.cmd" : "npm";
+    await runInstallCommand(output, request.id, npmProgram, ["install"], BASE_DIR, "npm install");
     await runInstallCommand(
       output,
       request.id,
-      "pnpm",
-      ["exec", "playwright", "install", "chromium"],
+      npmProgram,
+      ["exec", "--", "playwright", "install", "chromium"],
       BASE_DIR,
       "Playwright install"
     );
@@ -388,7 +394,11 @@ async function shutdown(exitCode = 0): Promise<void> {
     await manager.stopAll();
     await Promise.allSettled(Array.from(clients, (socket) => closeClientSocket(socket)));
     await serverClosed;
-    await Promise.allSettled([unlinkIfExists(PID_PATH), unlinkIfExists(SOCKET_PATH)]);
+    const cleanup = [unlinkIfExists(PID_PATH)];
+    if (requiresDaemonEndpointCleanup()) {
+      cleanup.push(unlinkIfExists(SOCKET_PATH));
+    }
+    await Promise.allSettled(cleanup);
 
     clients.clear();
 
@@ -401,7 +411,9 @@ async function shutdown(exitCode = 0): Promise<void> {
 async function start(): Promise<void> {
   await mkdir(BASE_DIR, { recursive: true });
   await ensureDevBrowserTempDir();
-  await unlinkIfExists(SOCKET_PATH);
+  if (requiresDaemonEndpointCleanup()) {
+    await unlinkIfExists(SOCKET_PATH);
+  }
   await writeFile(PID_PATH, `${process.pid}\n`);
 
   server = net.createServer((socket) => {
