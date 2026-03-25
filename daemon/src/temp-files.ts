@@ -1,12 +1,12 @@
 import { constants } from "node:fs";
 import { lstat, mkdir, open, type FileHandle } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { getDevBrowserBaseDir } from "./local-endpoint.js";
 
 const SAFE_PATH_SEGMENT_PATTERN = /[^A-Za-z0-9._-]/g;
 const NOFOLLOW_FLAG = constants.O_NOFOLLOW ?? 0;
 
-export const DEV_BROWSER_BASE_DIR = path.join(os.homedir(), ".dev-browser");
+export const DEV_BROWSER_BASE_DIR = getDevBrowserBaseDir();
 export const DEV_BROWSER_TMP_DIR = path.join(DEV_BROWSER_BASE_DIR, "tmp");
 
 function requireNonEmptyString(value: unknown, label: string): string {
@@ -115,6 +115,21 @@ function normalizeSymlinkError(error: unknown, destinationPath: string): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+async function assertDestinationIsNotSymlink(destinationPath: string): Promise<void> {
+  try {
+    const stats = await lstat(destinationPath);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to follow symlinked temp file: ${destinationPath}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+
+    throw error;
+  }
+}
+
 export async function ensureDevBrowserTempDir(): Promise<string> {
   await mkdir(DEV_BROWSER_BASE_DIR, {
     recursive: true,
@@ -154,6 +169,7 @@ export async function writeDevBrowserTempFile(
   const destinationPath = await resolveDevBrowserTempPath(fileName, {
     createParents: true,
   });
+  await assertDestinationIsNotSymlink(destinationPath);
 
   let handle: FileHandle | undefined;
   try {
@@ -174,6 +190,7 @@ export async function writeDevBrowserTempFile(
 
 export async function readDevBrowserTempFile(fileName: unknown): Promise<string> {
   const destinationPath = await resolveDevBrowserTempPath(fileName);
+  await assertDestinationIsNotSymlink(destinationPath);
 
   let handle: FileHandle | undefined;
   try {

@@ -1,7 +1,7 @@
 use dialoguer::{theme::ColorfulTheme, MultiSelect};
 use std::error::Error;
 use std::fs;
-use std::io;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -180,5 +180,5 @@ fn temp_path_for(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
 }
 
 fn interactive_terminal_available() -> bool {
-    unsafe { libc::isatty(libc::STDIN_FILENO) == 1 && libc::isatty(libc::STDERR_FILENO) == 1 }
+    io::stdin().is_terminal() && io::stderr().is_terminal()
 }

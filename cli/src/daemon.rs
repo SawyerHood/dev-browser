@@ -4,6 +4,7 @@ use std::error::Error;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -83,11 +84,7 @@ pub fn install_daemon_runtime() -> Result<(), Box<dyn Error>> {
 }
 
 pub fn is_daemon_running() -> bool {
-    let Some(pid) = daemon_pid() else {
-        return false;
-    };
-
-    process_is_alive(pid) && connect_to_daemon().is_ok()
+    connect_to_daemon().is_ok()
 }
 
 pub fn current_daemon_pid() -> Option<i32> {
@@ -97,7 +94,7 @@ pub fn current_daemon_pid() -> Option<i32> {
 pub fn wait_for_daemon_exit(pid: i32, timeout: Duration) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if !process_is_alive(pid) {
+        if daemon_has_exited(pid, connect_to_daemon().is_err()) {
             return Ok(());
         }
 
@@ -105,6 +102,10 @@ pub fn wait_for_daemon_exit(pid: i32, timeout: Duration) -> Result<(), Box<dyn E
     }
 
     Err(format!("Daemon failed to stop within {} seconds", timeout.as_secs()).into())
+}
+
+fn daemon_has_exited(_pid: i32, daemon_unreachable: bool) -> bool {
+    daemon_unreachable
 }
 
 fn spawn_daemon(command: &DaemonCommand) -> io::Result<()> {
@@ -115,6 +116,7 @@ fn spawn_daemon(command: &DaemonCommand) -> io::Result<()> {
     process.stdout(Stdio::null());
     process.stderr(Stdio::null());
 
+    #[cfg(unix)]
     unsafe {
         process.pre_exec(|| {
             if libc::setsid() == -1 {
@@ -132,15 +134,6 @@ fn daemon_pid() -> Option<i32> {
     let pid_path = dirs::home_dir()?.join(".dev-browser").join("daemon.pid");
     let pid = fs::read_to_string(pid_path).ok()?;
     pid.trim().parse::<i32>().ok()
-}
-
-fn process_is_alive(pid: i32) -> bool {
-    let result = unsafe { libc::kill(pid, 0) };
-    if result == 0 {
-        return true;
-    }
-
-    io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 fn find_daemon_command() -> Result<DaemonCommand, Box<dyn Error>> {

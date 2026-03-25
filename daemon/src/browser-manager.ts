@@ -516,6 +516,46 @@ export class BrowserManager {
           path.join(homeDir, ".config", "google-chrome-unstable", "DevToolsActivePort"),
           path.join(homeDir, ".config", "BraveSoftware", "Brave-Browser", "DevToolsActivePort"),
         ];
+      case "win32":
+        return [
+          path.join(
+            homeDir,
+            "AppData",
+            "Local",
+            "Google",
+            "Chrome",
+            "User Data",
+            "DevToolsActivePort"
+          ),
+          path.join(
+            homeDir,
+            "AppData",
+            "Local",
+            "Google",
+            "Chrome Beta",
+            "User Data",
+            "DevToolsActivePort"
+          ),
+          path.join(
+            homeDir,
+            "AppData",
+            "Local",
+            "Google",
+            "Chrome SxS",
+            "User Data",
+            "DevToolsActivePort"
+          ),
+          path.join(homeDir, "AppData", "Local", "Chromium", "User Data", "DevToolsActivePort"),
+          path.join(
+            homeDir,
+            "AppData",
+            "Local",
+            "BraveSoftware",
+            "Brave-Browser",
+            "User Data",
+            "DevToolsActivePort"
+          ),
+        ];
       default:
         return [];
     }
@@ -608,7 +648,9 @@ export class BrowserManager {
     const launchCommand =
       this.dependencies.platform === "darwin"
         ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222"
-        : "google-chrome --remote-debugging-port=9222";
+        : this.dependencies.platform === "win32"
+          ? "chrome.exe --remote-debugging-port=9222"
+          : "google-chrome --remote-debugging-port=9222";
 
     const details = [
       "Could not auto-discover a running Chrome instance with remote debugging enabled.",

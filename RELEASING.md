@@ -31,7 +31,7 @@ git push && git push --tags
 ```
 
 The GitHub Actions release workflow triggers automatically and:
-1. Cross-compiles the Rust CLI for 5 platforms (macOS ARM64/x64, Linux x64/ARM64/musl)
+1. Cross-compiles the Rust CLI for 6 platforms (macOS ARM64/x64, Linux x64/ARM64/musl, Windows x64)
 2. Bundles the daemon and sandbox client
 3. Creates a GitHub release with all binaries attached
 4. Publishes to npm
@@ -74,6 +74,7 @@ See `.github/workflows/release.yml`. On tag push (`v*`):
 | Linux x64 | `x86_64-unknown-linux-gnu` | `dev-browser-linux-x64` |
 | Linux ARM64 | `aarch64-unknown-linux-gnu` | `dev-browser-linux-arm64` |
 | Linux x64 (musl) | `x86_64-unknown-linux-musl` | `dev-browser-linux-musl-x64` |
+| Windows x64 | `x86_64-pc-windows-msvc` | `dev-browser-windows-x64.exe` |
 
 ## How Users Install
 
@@ -84,4 +85,13 @@ dev-browser install    # installs Playwright + Chromium
 
 # Or one-off via npx (uses Node wrapper, slightly slower startup)
 npx dev-browser --help
+```
+
+Windows PowerShell:
+
+```powershell
+npm install -g dev-browser
+dev-browser install
+chrome.exe --remote-debugging-port=9222
+dev-browser --connect
 ```

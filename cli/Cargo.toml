@@ -10,6 +10,7 @@ serde_json = "1"
 dirs = "5"
 libc = "0.2"
 dialoguer = "0.12"
+interprocess = "2.2.3"
 
 [profile.release]
 opt-level = 3

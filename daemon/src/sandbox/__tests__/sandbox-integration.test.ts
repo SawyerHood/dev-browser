@@ -1,17 +1,12 @@
-import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { BrowserManager } from "../../browser-manager.js";
 import { runScript } from "../script-runner-quickjs.js";
-
-const execFileAsync = promisify(execFile);
-const daemonDir = new URL("../../../", import.meta.url);
-const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+import { ensureSandboxClientBundle } from "./bundle-test-helpers.js";
 
 interface CapturedOutput {
   stdout: string[];
@@ -46,9 +41,7 @@ describe.sequential("QuickJS sandbox integration", () => {
   let manager: BrowserManager;
 
   beforeAll(async () => {
-    await execFileAsync(pnpmCommand, ["run", "bundle:sandbox-client"], {
-      cwd: daemonDir,
-    });
+    await ensureSandboxClientBundle();
 
     browserRootDir = await mkdtemp(path.join(os.tmpdir(), "dev-browser-quickjs-"));
     manager = new BrowserManager(path.join(browserRootDir, "browsers"));

@@ -214,6 +214,35 @@ describe("BrowserManager auto-connect", () => {
     await expect(getInternals(manager).readDevToolsActivePort()).resolves.toBe(websocketUrl);
   });
 
+  it("checks Windows Chrome-family DevToolsActivePort locations", async () => {
+    const homeDir = "C:\\Users\\tester";
+    const devToolsPath = path.join(
+      homeDir,
+      "AppData",
+      "Local",
+      "Google",
+      "Chrome",
+      "User Data",
+      "DevToolsActivePort"
+    );
+    const readFile = vi.fn(async (filePath: string) => {
+      if (filePath === devToolsPath) {
+        return "9222\n/devtools/browser/windows-port-file\n";
+      }
+
+      throw createEnoentError(filePath);
+    });
+    const { manager } = createManager({
+      homedir: () => homeDir,
+      platform: "win32",
+      readFile,
+    });
+
+    await expect(getInternals(manager).readDevToolsActivePort()).resolves.toBe(
+      "ws://127.0.0.1:9222/devtools/browser/windows-port-file"
+    );
+  });
+
   it("returns null when DevToolsActivePort is missing", async () => {
     const { manager } = createManager();
 
@@ -623,6 +652,26 @@ describe("BrowserManager auto-connect", () => {
     });
 
     await expect(manager.autoConnect("missing")).rejects.toThrowError(/remote-debugging-port=9222/);
+  });
+
+  it("reports a Windows-specific launch hint when auto-discovery fails on Windows", async () => {
+    const readFile = vi.fn(async () => {
+      throw createEnoentError(
+        "C:\\Users\\tester\\AppData\\Local\\Google\\Chrome\\User Data\\DevToolsActivePort"
+      );
+    });
+    const fetch = vi.fn(async () => {
+      throw new Error("connection refused");
+    }) as typeof globalThis.fetch;
+    const { manager } = createManager({
+      fetch,
+      platform: "win32",
+      readFile,
+    });
+
+    await expect(manager.autoConnect("missing")).rejects.toThrowError(
+      /chrome\.exe --remote-debugging-port=9222/
+    );
   });
 });
 
