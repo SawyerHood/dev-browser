@@ -33,6 +33,7 @@ const supportedTargets = Object.freeze({
   'linux-arm64': 'dev-browser-linux-arm64',
   'linux-musl-x64': 'dev-browser-linux-musl-x64',
   'linux-x64': 'dev-browser-linux-x64',
+  'win32-x64': 'dev-browser-windows-x64.exe',
 });
 
 function isMusl() {
@@ -80,6 +81,12 @@ function getTargetKey() {
 
     if (currentArch === 'arm64' || currentArch === 'aarch64') {
       return isMusl() ? null : 'linux-arm64';
+    }
+  }
+
+  if (currentPlatform === 'win32') {
+    if (currentArch === 'x64' || currentArch === 'x86_64') {
+      return 'win32-x64';
     }
   }
 

@@ -35,20 +35,29 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             binary: dev-browser-darwin-arm64
+            source_binary: dev-browser
           - target: x86_64-apple-darwin
             os: macos-latest
             binary: dev-browser-darwin-x64
+            source_binary: dev-browser
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             binary: dev-browser-linux-x64
+            source_binary: dev-browser
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             binary: dev-browser-linux-arm64
             cross: true
+            source_binary: dev-browser
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             binary: dev-browser-linux-musl-x64
             cross: true
+            source_binary: dev-browser
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: dev-browser-windows-x64.exe
+            source_binary: dev-browser.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -65,6 +74,7 @@ jobs:
         if: matrix.cross
         run: cargo install cross
       - name: Build
+        shell: bash
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }} --manifest-path cli/Cargo.toml
@@ -72,7 +82,8 @@ jobs:
             cargo build --release --target ${{ matrix.target }} --manifest-path cli/Cargo.toml
           fi
       - name: Rename binary
-        run: cp cli/target/${{ matrix.target }}/release/dev-browser ${{ matrix.binary }}
+        shell: bash
+        run: cp cli/target/${{ matrix.target }}/release/${{ matrix.source_binary }} ${{ matrix.binary }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.binary }}
