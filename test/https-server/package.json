@@ -1,0 +1,13 @@
+{
+  "name": "https-server-fixture",
+  "private": true,
+  "type": "module",
+  "description": "Self-signed HTTPS fixture for dev-browser ignore-https-errors end-to-end testing",
+  "scripts": {
+    "dev": "vite --port 5173"
+  },
+  "dependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "vite": "^8.0.3"
+  }
+}
