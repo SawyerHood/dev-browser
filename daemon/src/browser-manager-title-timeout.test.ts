@@ -20,7 +20,7 @@ function createMockEntry(page: Page): BrowserEntry {
     isConnected: () => true,
   } as unknown as Browser;
 
-  return {
+  const entry = {
     name: browserName,
     type: "connected",
     browser,
@@ -28,7 +28,10 @@ function createMockEntry(page: Page): BrowserEntry {
     pages: new Map(),
     endpoint: "ws://127.0.0.1:9222/devtools/browser/test",
     headless: false,
+    ignoreHTTPSErrors: false,
   };
+
+  return entry as BrowserEntry;
 }
 
 describe("BrowserManager listPages title handling", () => {
