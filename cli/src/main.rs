@@ -172,6 +172,26 @@ enum Command {
     )]
     Browsers,
     #[command(
+        about = "List open pages",
+        long_about = "List open pages.\n\nBy default, this shows pages for the selected `--browser` instance. Use `--all-browsers` to inspect tabs across every managed browser and see each tab's targetId, optional registered name, title, and URL."
+    )]
+    Pages {
+        #[arg(
+            long,
+            help = "List pages across all managed browsers",
+            long_help = "List pages across all managed browsers.\n\nWithout this flag, `pages` only inspects the browser selected by the top-level `--browser` flag."
+        )]
+        all_browsers: bool,
+    },
+    #[command(
+        about = "Manage a single browser instance",
+        long_about = "Manage a single browser instance.\n\nUse nested subcommands to stop one named managed browser without shutting down the entire daemon."
+    )]
+    Browser {
+        #[command(subcommand)]
+        command: BrowserCommand,
+    },
+    #[command(
         about = "Show daemon status",
         long_about = "Show daemon status.\n\nPrints daemon process details, socket path, uptime, and the current set of managed browsers."
     )]
@@ -181,6 +201,22 @@ enum Command {
         long_about = "Stop the daemon and all browsers.\n\nThis stops the background daemon process and closes every browser instance it currently manages."
     )]
     Stop,
+}
+
+#[derive(Subcommand)]
+enum BrowserCommand {
+    #[command(
+        about = "Stop one managed browser instance",
+        long_about = "Stop one managed browser instance.\n\nCloses the named browser, its pages, and its persistent connection state without stopping the daemon itself."
+    )]
+    Stop {
+        #[arg(
+            value_name = "NAME",
+            help = "Name of the browser instance to stop",
+            long_help = "Name of the browser instance to stop.\n\nThis must be the managed browser name shown by `dev-browser browsers`."
+        )]
+        name: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -204,10 +240,27 @@ struct StatusSummary {
     browsers: Vec<BrowserSummary>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PageSummary {
+    browser: String,
+    id: String,
+    url: String,
+    title: String,
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserStopSummary {
+    browser: String,
+    stopped: bool,
+}
+
 enum ResultMode {
     None,
     Json,
     Browsers,
+    Pages,
+    BrowserStopped,
     Status,
 }
 
@@ -241,6 +294,19 @@ fn run() -> Result<i32, Box<dyn Error>> {
                 ResultMode::Browsers,
             )
         }
+        Some(Command::Pages { all_browsers }) => {
+            ensure_daemon()?;
+            let mut request = json!({
+                "id": request_id("pages"),
+                "type": "pages",
+            });
+
+            if !all_browsers {
+                request["browser"] = Value::String(cli.browser.clone());
+            }
+
+            send_request(request, ResultMode::Pages)
+        }
         Some(Command::Install) => {
             install_daemon_runtime()?;
             Ok(0)
@@ -248,6 +314,19 @@ fn run() -> Result<i32, Box<dyn Error>> {
         Some(Command::InstallSkill) => {
             install_skill()?;
             Ok(0)
+        }
+        Some(Command::Browser {
+            command: BrowserCommand::Stop { name },
+        }) => {
+            ensure_daemon()?;
+            send_request(
+                json!({
+                    "id": request_id("browser-stop"),
+                    "type": "browser-stop",
+                    "browser": name,
+                }),
+                ResultMode::BrowserStopped,
+            )
         }
         Some(Command::Status) => {
             ensure_daemon()?;
@@ -386,6 +465,8 @@ fn render_result(data: &Value, result_mode: &ResultMode) -> Result<(), Box<dyn E
             }
         }
         ResultMode::Browsers => print_browsers(data)?,
+        ResultMode::Pages => print_pages(data)?,
+        ResultMode::BrowserStopped => print_browser_stop(data)?,
         ResultMode::Status => print_status(data)?,
     }
 
@@ -394,9 +475,31 @@ fn render_result(data: &Value, result_mode: &ResultMode) -> Result<(), Box<dyn E
 
 fn print_browsers(data: &Value) -> Result<(), Box<dyn Error>> {
     let browsers: Vec<BrowserSummary> = serde_json::from_value(data.clone())?;
+    println!("{}", render_browsers(&browsers));
+    Ok(())
+}
+
+fn print_status(data: &Value) -> Result<(), Box<dyn Error>> {
+    let status: StatusSummary = serde_json::from_value(data.clone())?;
+    println!("{}", render_status(&status));
+    Ok(())
+}
+
+fn print_pages(data: &Value) -> Result<(), Box<dyn Error>> {
+    let pages: Vec<PageSummary> = serde_json::from_value(data.clone())?;
+    println!("{}", render_pages(&pages));
+    Ok(())
+}
+
+fn print_browser_stop(data: &Value) -> Result<(), Box<dyn Error>> {
+    let result: BrowserStopSummary = serde_json::from_value(data.clone())?;
+    println!("{}", render_browser_stop(&result));
+    Ok(())
+}
+
+fn render_browsers(browsers: &[BrowserSummary]) -> String {
     if browsers.is_empty() {
-        println!("No browsers.");
-        return Ok(());
+        return "No browsers.".to_string();
     }
 
     let page_values: Vec<String> = browsers
@@ -429,28 +532,29 @@ fn print_browsers(data: &Value) -> Result<(), Box<dyn Error>> {
         .unwrap_or(6)
         .max("STATUS".len());
 
-    println!(
+    let mut lines = Vec::with_capacity(browsers.len() + 1);
+    lines.push(format!(
         "{:<name_width$}  {:<type_width$}  {:<status_width$}  PAGES",
         "NAME", "TYPE", "STATUS"
-    );
+    ));
 
     for (browser, pages) in browsers.iter().zip(page_values.iter()) {
-        println!(
+        lines.push(format!(
             "{:<name_width$}  {:<type_width$}  {:<status_width$}  {}",
             browser.name, browser.kind, browser.status, pages
-        );
+        ));
     }
 
-    Ok(())
+    lines.join("\n")
 }
 
-fn print_status(data: &Value) -> Result<(), Box<dyn Error>> {
-    let status: StatusSummary = serde_json::from_value(data.clone())?;
-
-    println!("PID: {}", status.pid);
-    println!("Uptime: {}", format_duration_ms(status.uptime_ms));
-    println!("Browsers: {}", status.browser_count);
-    println!("Socket: {}", status.socket_path);
+fn render_status(status: &StatusSummary) -> String {
+    let mut lines = vec![
+        format!("PID: {}", status.pid),
+        format!("Uptime: {}", format_duration_ms(status.uptime_ms)),
+        format!("Browsers: {}", status.browser_count),
+        format!("Socket: {}", status.socket_path),
+    ];
 
     if !status.browsers.is_empty() {
         let managed = status
@@ -459,10 +563,62 @@ fn print_status(data: &Value) -> Result<(), Box<dyn Error>> {
             .map(|browser| format!("{} ({}, {})", browser.name, browser.kind, browser.status))
             .collect::<Vec<_>>()
             .join(", ");
-        println!("Managed: {managed}");
+        lines.push(format!("Managed: {managed}"));
     }
 
-    Ok(())
+    lines.join("\n")
+}
+
+fn render_pages(pages: &[PageSummary]) -> String {
+    if pages.is_empty() {
+        return "No pages.".to_string();
+    }
+
+    let page_names: Vec<&str> = pages
+        .iter()
+        .map(|page| page.name.as_deref().unwrap_or("-"))
+        .collect();
+    let browser_width = pages
+        .iter()
+        .map(|page| page.browser.len())
+        .max()
+        .unwrap_or(7)
+        .max("BROWSER".len());
+    let name_width = page_names
+        .iter()
+        .map(|name| name.len())
+        .max()
+        .unwrap_or(4)
+        .max("NAME".len());
+    let title_width = pages
+        .iter()
+        .map(|page| page.title.len())
+        .max()
+        .unwrap_or(5)
+        .max("TITLE".len());
+
+    let mut lines = Vec::with_capacity(pages.len() + 1);
+    lines.push(format!(
+        "{:<browser_width$}  {:<name_width$}  {:<title_width$}  URL  ID",
+        "BROWSER", "NAME", "TITLE"
+    ));
+
+    for (page, page_name) in pages.iter().zip(page_names.iter()) {
+        lines.push(format!(
+            "{:<browser_width$}  {:<name_width$}  {:<title_width$}  {}  {}",
+            page.browser, page_name, page.title, page.url, page.id
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn render_browser_stop(result: &BrowserStopSummary) -> String {
+    if result.stopped {
+        format!("Browser \"{}\" stopped.", result.browser)
+    } else {
+        format!("Browser \"{}\" was not running.", result.browser)
+    }
 }
 
 fn read_script_from_stdin() -> io::Result<String> {
@@ -496,4 +652,92 @@ fn format_duration_ms(duration_ms: u64) -> String {
     let minutes = total_seconds / 60;
     let seconds = total_seconds % 60;
     format!("{minutes}m {seconds}s")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        render_browser_stop, render_browsers, render_pages, render_status, BrowserStopSummary,
+        BrowserSummary, PageSummary, StatusSummary,
+    };
+
+    #[test]
+    fn render_browsers_formats_named_pages() {
+        let output = render_browsers(&[BrowserSummary {
+            name: "default".to_string(),
+            kind: "launched".to_string(),
+            status: "running".to_string(),
+            pages: vec!["dashboard".to_string(), "login".to_string()],
+        }]);
+
+        assert!(output.contains("NAME"));
+        assert!(output.contains("default"));
+        assert!(output.contains("dashboard, login"));
+    }
+
+    #[test]
+    fn render_pages_includes_browser_and_target_id() {
+        let output = render_pages(&[
+            PageSummary {
+                browser: "default".to_string(),
+                id: "abc123".to_string(),
+                url: "https://example.com".to_string(),
+                title: "Example".to_string(),
+                name: Some("main".to_string()),
+            },
+            PageSummary {
+                browser: "connected".to_string(),
+                id: "def456".to_string(),
+                url: "https://example.org".to_string(),
+                title: "Other".to_string(),
+                name: None,
+            },
+        ]);
+
+        assert!(output.contains("BROWSER"));
+        assert!(output.contains("default"));
+        assert!(output.contains("main"));
+        assert!(output.contains("def456"));
+        assert!(output.contains("https://example.org"));
+    }
+
+    #[test]
+    fn render_status_lists_managed_browsers() {
+        let output = render_status(&StatusSummary {
+            pid: 42,
+            uptime_ms: 65_000,
+            browser_count: 2,
+            socket_path: "/tmp/dev-browser.sock".to_string(),
+            browsers: vec![
+                BrowserSummary {
+                    name: "default".to_string(),
+                    kind: "launched".to_string(),
+                    status: "running".to_string(),
+                    pages: vec!["main".to_string()],
+                },
+                BrowserSummary {
+                    name: "chrome".to_string(),
+                    kind: "connected".to_string(),
+                    status: "connected".to_string(),
+                    pages: Vec::new(),
+                },
+            ],
+        });
+
+        assert!(output.contains("PID: 42"));
+        assert!(output.contains("Uptime: 1m 5s"));
+        assert!(
+            output.contains("Managed: default (launched, running), chrome (connected, connected)")
+        );
+    }
+
+    #[test]
+    fn render_browser_stop_reports_missing_browser() {
+        let output = render_browser_stop(&BrowserStopSummary {
+            browser: "missing".to_string(),
+            stopped: false,
+        });
+
+        assert_eq!(output, "Browser \"missing\" was not running.");
+    }
 }

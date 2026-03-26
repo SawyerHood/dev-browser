@@ -328,12 +328,25 @@ async function handleRequest(socket: net.Socket, line: string): Promise<void> {
       });
       return;
 
-    case "browser-stop":
-      await manager.stopBrowser(request.browser);
+    case "pages":
       await writeMessage(socket, {
         id: request.id,
         type: "result",
-        data: { browser: request.browser, stopped: true },
+        data: await manager.listPagesAcrossBrowsers(request.browser),
+      });
+      await writeMessage(socket, {
+        id: request.id,
+        type: "complete",
+        success: true,
+      });
+      return;
+
+    case "browser-stop":
+      const stopped = await manager.stopBrowser(request.browser);
+      await writeMessage(socket, {
+        id: request.id,
+        type: "result",
+        data: { browser: request.browser, stopped },
       });
       await writeMessage(socket, {
         id: request.id,

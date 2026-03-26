@@ -28,6 +28,10 @@ export interface BrowserPageSummary {
   name: string | null;
 }
 
+export interface BrowserPageListing extends BrowserPageSummary {
+  browser: string;
+}
+
 type BrowserManagerDependencies = {
   connectOverCDP: typeof chromium.connectOverCDP;
   fetch: typeof globalThis.fetch;
@@ -257,6 +261,42 @@ export class BrowserManager {
     return summaries;
   }
 
+  async listPagesAcrossBrowsers(browserName?: string): Promise<BrowserPageListing[]> {
+    const browserNames = browserName
+      ? [browserName]
+      : Array.from(this.browsers.keys()).sort((left, right) => left.localeCompare(right));
+    const listings: BrowserPageListing[] = [];
+
+    for (const currentBrowser of browserNames) {
+      const pages = await this.listPages(currentBrowser);
+      for (const page of pages) {
+        listings.push({
+          browser: currentBrowser,
+          ...page,
+        });
+      }
+    }
+
+    return listings.sort((left, right) => {
+      const browserOrder = left.browser.localeCompare(right.browser);
+      if (browserOrder !== 0) {
+        return browserOrder;
+      }
+
+      const nameOrder = (left.name ?? "\uffff").localeCompare(right.name ?? "\uffff");
+      if (nameOrder !== 0) {
+        return nameOrder;
+      }
+
+      const titleOrder = left.title.localeCompare(right.title);
+      if (titleOrder !== 0) {
+        return titleOrder;
+      }
+
+      return left.id.localeCompare(right.id);
+    });
+  }
+
   async closePage(browserName: string, pageName: string): Promise<void> {
     const entry = this.getBrowserEntry(browserName);
     const page = entry.pages.get(pageName);
@@ -297,10 +337,10 @@ export class BrowserManager {
       .sort((left, right) => left.name.localeCompare(right.name));
   }
 
-  async stopBrowser(name: string): Promise<void> {
+  async stopBrowser(name: string): Promise<boolean> {
     const entry = this.browsers.get(name);
     if (!entry) {
-      return;
+      return false;
     }
 
     this.browsers.delete(name);
@@ -315,6 +355,8 @@ export class BrowserManager {
     } catch {
       // Best effort during shutdown or reconnect.
     }
+
+    return true;
   }
 
   async stopAll(): Promise<void> {

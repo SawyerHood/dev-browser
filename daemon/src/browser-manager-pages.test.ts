@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { BrowserManager } from "./browser-manager.js";
 
 const browserName = "browser-manager-pages";
+const secondaryBrowserName = "browser-manager-pages-secondary";
 
 function createDataUrl(title: string, body: string): string {
   return `data:text/html,${encodeURIComponent(`<title>${title}</title>${body}`)}`;
@@ -23,6 +24,7 @@ describe.sequential("BrowserManager page discovery", () => {
 
   afterEach(async () => {
     await manager.stopBrowser(browserName);
+    await manager.stopBrowser(secondaryBrowserName);
   }, 180_000);
 
   afterAll(async () => {
@@ -138,5 +140,59 @@ describe.sequential("BrowserManager page discovery", () => {
     expect(namedPage.isClosed()).toBe(true);
     expect(anonymousPage.isClosed()).toBe(true);
     expect(manager.listBrowsers()).toEqual([]);
+  }, 120_000);
+
+  it("listPagesAcrossBrowsers returns browser metadata for every managed browser", async () => {
+    await ensureBrowser();
+    await manager.ensureBrowser(secondaryBrowserName, {
+      headless: true,
+    });
+
+    const defaultPage = await manager.getPage(browserName, "dashboard");
+    const secondaryPage = await manager.getPage(secondaryBrowserName, "reports");
+
+    await defaultPage.goto(createDataUrl("Dashboard", "<main>default browser</main>"));
+    await secondaryPage.goto(createDataUrl("Reports", "<main>secondary browser</main>"));
+
+    await expect(manager.listPagesAcrossBrowsers()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          browser: browserName,
+          name: "dashboard",
+          title: "Dashboard",
+        }),
+        expect.objectContaining({
+          browser: secondaryBrowserName,
+          name: "reports",
+          title: "Reports",
+        }),
+      ])
+    );
+  }, 120_000);
+
+  it("listPagesAcrossBrowsers can filter to one browser", async () => {
+    await ensureBrowser();
+    await manager.ensureBrowser(secondaryBrowserName, {
+      headless: true,
+    });
+
+    const defaultPage = await manager.getPage(browserName, "main");
+    const secondaryPage = await manager.getPage(secondaryBrowserName, "secondary");
+
+    await defaultPage.goto(createDataUrl("Main", "<main>default browser</main>"));
+    await secondaryPage.goto(createDataUrl("Secondary", "<main>secondary browser</main>"));
+
+    const pages = await manager.listPagesAcrossBrowsers(browserName);
+
+    expect(pages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          browser: browserName,
+          name: "main",
+          title: "Main",
+        }),
+      ])
+    );
+    expect(pages.every((page) => page.browser === browserName)).toBe(true);
   }, 120_000);
 });

@@ -17,6 +17,11 @@ export const BrowsersRequestSchema = RequestBaseSchema.extend({
   type: z.literal("browsers"),
 });
 
+export const PagesRequestSchema = RequestBaseSchema.extend({
+  type: z.literal("pages"),
+  browser: z.string().min(1).optional(),
+});
+
 export const BrowserStopRequestSchema = RequestBaseSchema.extend({
   type: z.literal("browser-stop"),
   browser: z.string().min(1),
@@ -37,6 +42,7 @@ export const StopRequestSchema = RequestBaseSchema.extend({
 export const RequestSchema = z.discriminatedUnion("type", [
   ExecuteRequestSchema,
   BrowsersRequestSchema,
+  PagesRequestSchema,
   BrowserStopRequestSchema,
   StatusRequestSchema,
   InstallRequestSchema,

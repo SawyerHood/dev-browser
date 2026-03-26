@@ -37,6 +37,22 @@ console.log(JSON.stringify(tabs, null, 2));
 EOF
 ```
 
+### Inspecting managed browsers and pages
+
+```bash
+# Show every managed browser and its named pages
+dev-browser browsers
+
+# Show all tabs for the selected browser (defaults to "default")
+dev-browser pages
+
+# Show tabs across every managed browser with targetIds
+dev-browser pages --all-browsers
+
+# Stop one managed browser without shutting down the daemon
+dev-browser browser stop default
+```
+
 ### Windows notes
 
 PowerShell install:
