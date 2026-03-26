@@ -23,8 +23,8 @@ const rootPackageJsonPath = join(workspaceRoot, 'package.json');
 
 const postinstallSource = await readFile(postinstallSourcePath, 'utf8');
 const rootPackageJson = JSON.parse(await readFile(rootPackageJsonPath, 'utf8'));
-const currentVersion = rootPackageJson.version;
 const checksumRequiredFromVersion = readChecksumsRequiredFromVersion(postinstallSource);
+const checksumEraVersion = checksumRequiredFromVersion;
 const legacyVersion = getPreviousVersion(checksumRequiredFromVersion);
 const binaryName = getBinaryName();
 
@@ -39,7 +39,7 @@ test('postinstall checksum verification end-to-end', async (t) => {
       binaryContent: fakeBinary,
       binaryName,
       includeChecksums: true,
-      version: currentVersion,
+      version: checksumEraVersion,
     });
     t.after(() => rm(releaseRoot, { force: true, recursive: true }));
 
@@ -48,7 +48,7 @@ test('postinstall checksum verification end-to-end', async (t) => {
 
     const packageDir = await createTempPackage({
       releaseBaseUrl: server.releaseBaseUrl,
-      version: currentVersion,
+      version: checksumEraVersion,
     });
     t.after(() => rm(packageDir, { force: true, recursive: true }));
 
@@ -68,7 +68,7 @@ test('postinstall checksum verification end-to-end', async (t) => {
       binaryName,
       checksumOverrideContent: Buffer.from('different-content-for-checksum'),
       includeChecksums: true,
-      version: currentVersion,
+      version: checksumEraVersion,
     });
     t.after(() => rm(releaseRoot, { force: true, recursive: true }));
 
@@ -77,7 +77,7 @@ test('postinstall checksum verification end-to-end', async (t) => {
 
     const packageDir = await createTempPackage({
       releaseBaseUrl: server.releaseBaseUrl,
-      version: currentVersion,
+      version: checksumEraVersion,
     });
     t.after(() => rm(packageDir, { force: true, recursive: true }));
 
@@ -95,7 +95,7 @@ test('postinstall checksum verification end-to-end', async (t) => {
       binaryContent: Buffer.from('fake-binary-missing-checksum'),
       binaryName,
       includeChecksums: false,
-      version: currentVersion,
+      version: checksumEraVersion,
     });
     t.after(() => rm(releaseRoot, { force: true, recursive: true }));
 
@@ -104,7 +104,7 @@ test('postinstall checksum verification end-to-end', async (t) => {
 
     const packageDir = await createTempPackage({
       releaseBaseUrl: server.releaseBaseUrl,
-      version: currentVersion,
+      version: checksumEraVersion,
     });
     t.after(() => rm(packageDir, { force: true, recursive: true }));
 
