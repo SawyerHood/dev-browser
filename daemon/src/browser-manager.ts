@@ -50,6 +50,7 @@ type DebuggerWebSocketLookupResult =
 const DISCOVERY_PORTS = [9222, 9223, 9224, 9225, 9226, 9227, 9228, 9229];
 const PROBE_TIMEOUT_MS = 750;
 const MANUAL_CONNECT_TIMEOUT_MS = 5_000;
+const PAGE_TITLE_TIMEOUT_MS = 1_500;
 const TARGET_ID_PATTERN = /^[a-f0-9]{16,}$/i;
 
 function isIgnorableFileError(error: unknown): boolean {
@@ -237,7 +238,7 @@ export class BrowserManager {
 
       let title = "";
       try {
-        title = await page.title();
+        title = await this.getPageTitle(page);
       } catch (error) {
         if (page.isClosed()) {
           continue;
@@ -790,6 +791,23 @@ export class BrowserManager {
     }
 
     return pages;
+  }
+
+  private async getPageTitle(page: Page): Promise<string> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      return await Promise.race([
+        page.title(),
+        new Promise<string>((resolve) => {
+          timeoutId = setTimeout(() => resolve(""), PAGE_TITLE_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    }
   }
 
   private async findPageByTargetId(entry: BrowserEntry, targetId: string): Promise<Page | null> {
