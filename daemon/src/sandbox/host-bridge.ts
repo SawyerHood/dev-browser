@@ -2,6 +2,7 @@ import {
   DispatcherConnection,
   type DispatcherConnectionLike,
   PlaywrightDispatcher,
+  type PlaywrightDispatcherCtorArgs,
   type PlaywrightDispatcherLike,
   RootDispatcher,
   type RootDispatcherLike,
@@ -26,6 +27,23 @@ export class HostBridge {
   private playwrightDispatcher?: PlaywrightDispatcherLike;
   private disposed = false;
 
+  private createPlaywrightDispatcher(rootScope: unknown): PlaywrightDispatcherLike {
+    const dispatcherArgs: PlaywrightDispatcherCtorArgs =
+      PlaywrightDispatcher.length >= 4
+        ? [rootScope, this.playwright, undefined, this.options.preLaunchedBrowser, undefined]
+        : [
+            rootScope,
+            this.playwright,
+            {
+              preLaunchedBrowser: this.options.preLaunchedBrowser,
+              sharedBrowser: this.options.sharedBrowser,
+              denyLaunch: this.options.denyLaunch,
+            },
+          ];
+
+    return new PlaywrightDispatcher(...dispatcherArgs);
+  }
+
   constructor(options: HostBridgeOptions) {
     this.sendToSandbox = options.sendToSandbox;
     this.options = {
@@ -42,11 +60,7 @@ export class HostBridge {
       this.sendToSandbox(JSON.stringify(message));
     };
     this.rootDispatcher = new RootDispatcher(this.dispatcherConnection, async (rootScope) => {
-      this.playwrightDispatcher = new PlaywrightDispatcher(rootScope, this.playwright, {
-        preLaunchedBrowser: this.options.preLaunchedBrowser,
-        sharedBrowser: this.options.sharedBrowser,
-        denyLaunch: this.options.denyLaunch,
-      });
+      this.playwrightDispatcher = this.createPlaywrightDispatcher(rootScope);
       return this.playwrightDispatcher;
     });
   }

@@ -16,6 +16,7 @@
  */
 
 import { evaluationScript } from "./clientHelper";
+import { ChannelOwner } from "./channelOwner";
 import { setTestIdAttribute } from "./locator";
 
 import type { SelectorEngine } from "./types";
@@ -28,6 +29,7 @@ export class Selectors implements api.Selectors {
   private _platform: Platform;
   private _selectorEngines: channels.SelectorEngine[] = [];
   private _testIdAttributeName: string | undefined;
+  readonly _channels = new Set<SelectorsOwner>();
   readonly _contextsForSelectors = new Set<BrowserContext>();
 
   constructor(platform: Platform) {
@@ -44,6 +46,9 @@ export class Selectors implements api.Selectors {
 
     const source = await evaluationScript(this._platform, script, undefined, false);
     const selectorEngine: channels.SelectorEngine = { ...options, name, source };
+    for (const channel of this._channels) {
+      await channel._channel.register(selectorEngine);
+    }
     for (const context of this._contextsForSelectors)
       await context._channel.registerSelectorEngine({ selectorEngine });
     this._selectorEngines.push(selectorEngine);
@@ -52,6 +57,11 @@ export class Selectors implements api.Selectors {
   setTestIdAttribute(attributeName: string) {
     this._testIdAttributeName = attributeName;
     setTestIdAttribute(attributeName);
+    for (const channel of this._channels) {
+      channel._channel
+        .setTestIdAttributeName({ testIdAttributeName: attributeName })
+        .catch(() => {});
+    }
     for (const context of this._contextsForSelectors) {
       context._options.testIdAttributeName = attributeName;
       context._channel
@@ -66,5 +76,27 @@ export class Selectors implements api.Selectors {
       selectorEngines: this._selectorEngines,
       testIdAttributeName: this._testIdAttributeName,
     };
+  }
+
+  _addChannel(channel: SelectorsOwner) {
+    this._channels.add(channel);
+    for (const selectorEngine of this._selectorEngines) {
+      channel._channel.register(selectorEngine).catch(() => {});
+    }
+    if (this._testIdAttributeName) {
+      channel._channel
+        .setTestIdAttributeName({ testIdAttributeName: this._testIdAttributeName })
+        .catch(() => {});
+    }
+  }
+
+  _removeChannel(channel: SelectorsOwner) {
+    this._channels.delete(channel);
+  }
+}
+
+export class SelectorsOwner extends ChannelOwner<channels.SelectorsChannel> {
+  static from(channel: channels.SelectorsChannel): SelectorsOwner {
+    return (channel as any)._object;
   }
 }

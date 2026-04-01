@@ -410,6 +410,7 @@ scheme.PlaywrightInitializer = tObject({
   android: tChannel(["Android"]),
   electron: tChannel(["Electron"]),
   utils: tOptional(tChannel(["LocalUtils"])),
+  selectors: tOptional(tChannel(["Selectors"])),
   preLaunchedBrowser: tOptional(tChannel(["Browser"])),
   preConnectedAndroidDevice: tOptional(tChannel(["AndroidDevice"])),
   socksSupport: tOptional(tChannel(["SocksSupport"])),
@@ -559,6 +560,17 @@ scheme.SocksSupportSocksEndParams = tObject({
   uid: tString,
 });
 scheme.SocksSupportSocksEndResult = tOptional(tObject({}));
+scheme.SelectorsInitializer = tOptional(tObject({}));
+scheme.SelectorsRegisterParams = tObject({
+  name: tString,
+  source: tString,
+  contentScript: tOptional(tBoolean),
+});
+scheme.SelectorsRegisterResult = tOptional(tObject({}));
+scheme.SelectorsSetTestIdAttributeNameParams = tObject({
+  testIdAttributeName: tString,
+});
+scheme.SelectorsSetTestIdAttributeNameResult = tOptional(tObject({}));
 scheme.BrowserTypeInitializer = tObject({
   executablePath: tString,
   name: tString,

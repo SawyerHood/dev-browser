@@ -38,6 +38,7 @@ import { LocalUtils } from "./localUtils";
 import { Request, Response, Route, WebSocket, WebSocketRoute } from "./network";
 import { BindingCall, Page } from "./page";
 import { Playwright } from "./playwright";
+import { SelectorsOwner } from "./selectors";
 import { Stream } from "./stream";
 import { Tracing } from "./tracing";
 import { Worker } from "./worker";
@@ -359,6 +360,9 @@ export class Connection extends EventEmitter {
         break;
       case "Stream":
         result = new Stream(parent, type, guid, initializer);
+        break;
+      case "Selectors":
+        result = new SelectorsOwner(parent, type, guid, initializer);
         break;
       case "SocksSupport":
         result = new DummyChannelOwner(parent, type, guid, initializer);

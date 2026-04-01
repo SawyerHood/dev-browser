@@ -22,7 +22,7 @@ import { ChannelOwner } from "./channelOwner";
 import { Electron } from "./electron";
 import { TimeoutError } from "./errors";
 import { APIRequest } from "./fetch";
-import { Selectors } from "./selectors";
+import { Selectors, SelectorsOwner } from "./selectors";
 
 import type * as channels from "../protocol/channels";
 import type { LaunchOptions } from "../../types/types";
@@ -63,6 +63,13 @@ export class Playwright extends ChannelOwner<channels.PlaywrightChannel> {
     this._electron._playwright = this;
     this.devices = this._connection.localUtils()?.devices ?? {};
     this.selectors = new Selectors(this._connection._platform);
+    if (initializer.selectors) {
+      const selectorsOwner = SelectorsOwner.from(initializer.selectors);
+      this.selectors._addChannel(selectorsOwner);
+      this._connection.on("close", () => {
+        this.selectors._removeChannel(selectorsOwner);
+      });
+    }
     this.errors = { TimeoutError };
   }
 

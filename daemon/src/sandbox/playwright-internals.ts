@@ -45,6 +45,16 @@ export interface HostBridgeDispatcherOptions {
   denyLaunch?: boolean;
 }
 
+export type PlaywrightDispatcherCtorArgs =
+  | [scope: unknown, playwright: unknown, options?: HostBridgeDispatcherOptions]
+  | [
+      scope: unknown,
+      playwright: unknown,
+      socksProxy?: unknown,
+      preLaunchedBrowser?: unknown,
+      prelaunchedAndroidDevice?: unknown,
+    ];
+
 function resolvePlaywrightInternal(modulePath: string): string {
   const candidates = [
     path.resolve(currentDir, "../../node_modules/playwright-core", modulePath),
@@ -70,11 +80,7 @@ const serverInternals = require(
     connection: DispatcherConnectionLike,
     createPlaywright?: (scope: unknown, params: RootInitializeParams) => Promise<unknown>
   ) => RootDispatcherLike;
-  PlaywrightDispatcher: new (
-    scope: unknown,
-    playwright: unknown,
-    options?: HostBridgeDispatcherOptions
-  ) => PlaywrightDispatcherLike;
+  PlaywrightDispatcher: new (...args: PlaywrightDispatcherCtorArgs) => PlaywrightDispatcherLike;
 };
 
 const clientInternals = require(
