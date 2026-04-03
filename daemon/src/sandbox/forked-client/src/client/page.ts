@@ -461,7 +461,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
   ): Promise<Response | null> {
     const waitUntil = verifyLoadState(
       "waitUntil",
-      options.waitUntil === undefined ? "load" : options.waitUntil
+      options.waitUntil === undefined ? "domcontentloaded" : options.waitUntil
     );
     return Response.fromNullable(
       (
@@ -606,7 +606,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
   ): Promise<Response | null> {
     const waitUntil = verifyLoadState(
       "waitUntil",
-      options.waitUntil === undefined ? "load" : options.waitUntil
+      options.waitUntil === undefined ? "domcontentloaded" : options.waitUntil
     );
     return Response.fromNullable(
       (
@@ -624,7 +624,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
   ): Promise<Response | null> {
     const waitUntil = verifyLoadState(
       "waitUntil",
-      options.waitUntil === undefined ? "load" : options.waitUntil
+      options.waitUntil === undefined ? "domcontentloaded" : options.waitUntil
     );
     return Response.fromNullable(
       (

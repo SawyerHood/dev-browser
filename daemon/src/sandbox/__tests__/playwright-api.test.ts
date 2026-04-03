@@ -273,6 +273,30 @@ function handleNavigationRequest(request: IncomingMessage, response: ServerRespo
     case "/nav/third":
       html = navigationPageHtml("Third Page", "/nav/third");
       break;
+    case "/nav/hmr":
+      // Simulate HMR dev server: HTML parses fine, DOMContentLoaded fires,
+      // but an image never finishes loading so "load" never fires.
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      response.end(`<!DOCTYPE html>
+<html>
+  <head><title>HMR Page</title></head>
+  <body>
+    <h1>HMR Page</h1>
+    <img src="/nav/hmr-pending.png">
+  </body>
+</html>`);
+      return;
+    case "/nav/hmr-pending.png":
+      // Never respond — keeps the connection open so "load" never fires
+      response.writeHead(200, {
+        "content-type": "image/png",
+        "cache-control": "no-store",
+      });
+      // Intentionally leave the response open (no response.end())
+      return;
     default:
       response.writeHead(404, {
         "content-type": "text/plain; charset=utf-8",
@@ -290,6 +314,13 @@ function handleNavigationRequest(request: IncomingMessage, response: ServerRespo
 
 async function createNavigationServer(): Promise<NavigationServer> {
   const server = createServer(handleNavigationRequest);
+  const openConnections = new Set<import("node:net").Socket>();
+
+  server.on("connection", (socket) => {
+    openConnections.add(socket);
+    socket.on("close", () => openConnections.delete(socket));
+  });
+
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
 
@@ -303,6 +334,10 @@ async function createNavigationServer(): Promise<NavigationServer> {
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     close: async () => {
+      for (const socket of openConnections) {
+        socket.destroy();
+      }
+      openConnections.clear();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {
@@ -375,6 +410,21 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
       expect(result.secondUrl).toBe(`${navigationServer.baseUrl}/nav/second`);
       expect(result.firstTitle).toBe("First Page");
       expect(result.secondTitle).toBe("Second Page");
+    }, 15_000);
+
+    it("resolves goto with waitUntil domcontentloaded when load event is blocked", async () => {
+      const hmrUrl = `${navigationServer.baseUrl}/nav/hmr`;
+      const result = await harness.runJson<{ title: string; elapsed: number }>(`
+        const page = await browser.getPage("navigation-hmr");
+        const start = Date.now();
+        await page.goto(${JSON.stringify(hmrUrl)}, { waitUntil: "domcontentloaded" });
+        const elapsed = Date.now() - start;
+        console.log(JSON.stringify({ title: await page.title(), elapsed }));
+      `);
+
+      expect(result.title).toBe("HMR Page");
+      // Should resolve in well under 5s since DOMContentLoaded fires quickly
+      expect(result.elapsed).toBeLessThan(5_000);
     }, 15_000);
 
     it("supports goBack(), goForward(), and reload()", async () => {

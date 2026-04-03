@@ -133,7 +133,7 @@ export class Frame extends ChannelOwner<channels.FrameChannel> implements api.Fr
   ): Promise<network.Response | null> {
     const waitUntil = verifyLoadState(
       "waitUntil",
-      options.waitUntil === undefined ? "load" : options.waitUntil
+      options.waitUntil === undefined ? "domcontentloaded" : options.waitUntil
     );
     return network.Response.fromNullable(
       (
@@ -174,7 +174,7 @@ export class Frame extends ChannelOwner<channels.FrameChannel> implements api.Fr
       async () => {
         const waitUntil = verifyLoadState(
           "waitUntil",
-          options.waitUntil === undefined ? "load" : options.waitUntil
+          options.waitUntil === undefined ? "domcontentloaded" : options.waitUntil
         );
         const waiter = this._setupNavigationWaiter(options);
 
@@ -392,7 +392,7 @@ export class Frame extends ChannelOwner<channels.FrameChannel> implements api.Fr
   ): Promise<void> {
     const waitUntil = verifyLoadState(
       "waitUntil",
-      options.waitUntil === undefined ? "load" : options.waitUntil
+      options.waitUntil === undefined ? "domcontentloaded" : options.waitUntil
     );
     await this._channel.setContent({
       html,

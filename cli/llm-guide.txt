@@ -74,7 +74,8 @@ LLM USAGE GUIDE:
     EOF
 
   Common Playwright Page methods:
-    page.goto(url)                         Navigate to a URL
+    page.goto(url)                         Navigate to a URL (waits for DOMContentLoaded by default)
+    page.goto(url, { waitUntil })          waitUntil: "domcontentloaded" (default) | "load" | "commit" | "networkidle"
     page.title()                           Get the current page title
     page.url()                             Get the current URL
     page.snapshotForAI(options)            Get an AI-optimized snapshot; returns { full, incremental? }
