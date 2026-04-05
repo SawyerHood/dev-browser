@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 
-import { webColors } from "../utils/isomorphic/colors";
+import { webColors } from '../utils/isomorphic/colors';
 
-import type * as fs from "fs";
-import type * as path from "path";
-import type { Readable, Writable } from "stream";
-import type { Colors } from "../utils/isomorphic/colors";
-import type * as channels from "../protocol/channels";
+import type * as fs from 'fs';
+import type * as path from 'path';
+import type { Readable, Writable } from 'stream';
+import type { Colors } from '../utils/isomorphic/colors';
+import type * as channels from '../protocol/channels';
 
 export type Zone = {
   push(data: unknown): Zone;
@@ -33,12 +33,12 @@ export type Zone = {
 const noopZone: Zone = {
   push: () => noopZone,
   pop: () => noopZone,
-  run: (func) => func(),
+  run: func => func(),
   data: () => undefined,
 };
 
 export type Platform = {
-  name: "node" | "web" | "empty";
+  name: 'node' | 'web' | 'empty';
 
   boxedStackPrefixes: () => string[];
   calculateSha1: (text: string) => Promise<string>;
@@ -51,32 +51,31 @@ export type Platform = {
   inspectCustom: symbol | undefined;
   isDebugMode: () => boolean;
   isJSDebuggerAttached: () => boolean;
-  isLogEnabled: (name: "api" | "channel") => boolean;
-  isUnderTest: () => boolean;
-  log: (name: "api" | "channel", message: string | Error | object) => void;
+  isLogEnabled: (name: 'api' | 'channel') => boolean;
+  isUnderTest: () => boolean,
+  log: (name: 'api' | 'channel', message: string | Error | object) => void;
   path: () => typeof path;
   pathSeparator: string;
-  showInternalStackFrames: () => boolean;
-  streamFile: (path: string, writable: Writable) => Promise<void>;
-  streamReadable: (channel: channels.StreamChannel) => Readable;
-  streamWritable: (channel: channels.WritableStreamChannel) => Writable;
-  zodToJsonSchema: (schema: any) => any;
-  zones: { empty: Zone; current: () => Zone };
+  showInternalStackFrames: () => boolean,
+  streamFile: (path: string, writable: Writable) => Promise<void>,
+  streamReadable: (channel: channels.StreamChannel) => Readable,
+  streamWritable: (channel: channels.WritableStreamChannel) => Writable,
+  zones: { empty: Zone, current: () => Zone; };
 };
 
 export const emptyPlatform: Platform = {
-  name: "empty",
+  name: 'empty',
 
   boxedStackPrefixes: () => [],
 
   calculateSha1: async () => {
-    throw new Error("Not implemented");
+    throw new Error('Not implemented');
   },
 
   colors: webColors,
 
   createGuid: () => {
-    throw new Error("Not implemented");
+    throw new Error('Not implemented');
   },
 
   defaultMaxListeners: () => 10,
@@ -84,7 +83,7 @@ export const emptyPlatform: Platform = {
   env: {},
 
   fs: () => {
-    throw new Error("Not implemented");
+    throw new Error('Not implemented');
   },
 
   inspectCustom: undefined,
@@ -93,39 +92,35 @@ export const emptyPlatform: Platform = {
 
   isJSDebuggerAttached: () => false,
 
-  isLogEnabled(name: "api" | "channel") {
+  isLogEnabled(name: 'api' | 'channel') {
     return false;
   },
 
   isUnderTest: () => false,
 
-  log(name: "api" | "channel", message: string | Error | object) {},
+  log(name: 'api' | 'channel', message: string | Error | object) { },
 
   path: () => {
-    throw new Error("Function not implemented.");
+    throw new Error('Function not implemented.');
   },
 
-  pathSeparator: "/",
+  pathSeparator: '/',
 
   showInternalStackFrames: () => false,
 
   streamFile(path: string, writable: Writable): Promise<void> {
-    throw new Error("Streams are not available");
+    throw new Error('Streams are not available');
   },
 
   streamReadable: (channel: channels.StreamChannel) => {
-    throw new Error("Streams are not available");
+    throw new Error('Streams are not available');
   },
 
   streamWritable: (channel: channels.WritableStreamChannel) => {
-    throw new Error("Streams are not available");
-  },
-
-  zodToJsonSchema: (schema: any) => {
-    throw new Error("Zod is not available");
+    throw new Error('Streams are not available');
   },
 
   zones: { empty: noopZone, current: () => noopZone },
 };
 
-export { quickjsPlatform } from "../../quickjs-platform";
+export { quickjsPlatform } from '../../quickjs-platform';

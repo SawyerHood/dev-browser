@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-import type { BrowserContext } from "./browserContext";
-import type { APIRequestContext, NewContextOptions } from "./fetch";
-import type { StackFrame } from "../protocol/channels";
-import type { Page } from "./page";
-import type { BrowserContextOptions } from "./types";
+import type { BrowserContext } from './browserContext';
+import type { APIRequestContext, NewContextOptions } from './fetch';
+import type { StackFrame } from '../protocol/channels';
+import type { Page } from './page';
+import type { BrowserContextOptions } from './types';
 
 // Instrumentation can mutate the data, for example change apiName or stepId.
 export interface ApiCallData {
@@ -35,10 +35,7 @@ export interface ClientInstrumentation {
   addListener(listener: ClientInstrumentationListener): void;
   removeListener(listener: ClientInstrumentationListener): void;
   removeAllListeners(): void;
-  onApiCallBegin(
-    apiCall: ApiCallData,
-    channel: { type: string; method: string; params?: Record<string, any> }
-  ): void;
+  onApiCallBegin(apiCall: ApiCallData, channel: { type: string, method: string, params?: Record<string, any> }): void;
   onApiCallEnd(apiCall: ApiCallData): void;
   onWillPause(options: { keepTestTimeout: boolean }): void;
   onPage(page: Page): void;
@@ -52,10 +49,7 @@ export interface ClientInstrumentation {
 }
 
 export interface ClientInstrumentationListener {
-  onApiCallBegin?(
-    apiCall: ApiCallData,
-    channel: { type: string; method: string; params?: Record<string, any> }
-  ): void;
+  onApiCallBegin?(apiCall: ApiCallData, channel: { type: string, method: string, params?: Record<string, any>  }): void;
   onApiCallEnd?(apiCall: ApiCallData): void;
   onWillPause?(options: { keepTestTimeout: boolean }): void;
   onPage?(page: Page): void;
@@ -69,29 +63,29 @@ export interface ClientInstrumentationListener {
 
 export function createInstrumentation(): ClientInstrumentation {
   const listeners: ClientInstrumentationListener[] = [];
-  return new Proxy(
-    {},
-    {
-      get: (obj: any, prop: string | symbol) => {
-        if (typeof prop !== "string") return obj[prop];
-        if (prop === "addListener")
-          return (listener: ClientInstrumentationListener) => listeners.push(listener);
-        if (prop === "removeListener")
-          return (listener: ClientInstrumentationListener) =>
-            listeners.splice(listeners.indexOf(listener), 1);
-        if (prop === "removeAllListeners") return () => listeners.splice(0, listeners.length);
-        if (prop.startsWith("run")) {
-          return async (...params: any[]) => {
-            for (const listener of listeners) await (listener as any)[prop]?.(...params);
-          };
-        }
-        if (prop.startsWith("on")) {
-          return (...params: any[]) => {
-            for (const listener of listeners) (listener as any)[prop]?.(...params);
-          };
-        }
+  return new Proxy({}, {
+    get: (obj: any, prop: string | symbol) => {
+      if (typeof prop !== 'string')
         return obj[prop];
-      },
-    }
-  );
+      if (prop === 'addListener')
+        return (listener: ClientInstrumentationListener) => listeners.push(listener);
+      if (prop === 'removeListener')
+        return (listener: ClientInstrumentationListener) => listeners.splice(listeners.indexOf(listener), 1);
+      if (prop === 'removeAllListeners')
+        return () => listeners.splice(0, listeners.length);
+      if (prop.startsWith('run')) {
+        return async (...params: any[]) => {
+          for (const listener of listeners)
+            await (listener as any)[prop]?.(...params);
+        };
+      }
+      if (prop.startsWith('on')) {
+        return (...params: any[]) => {
+          for (const listener of listeners)
+            (listener as any)[prop]?.(...params);
+        };
+      }
+      return obj[prop];
+    },
+  });
 }

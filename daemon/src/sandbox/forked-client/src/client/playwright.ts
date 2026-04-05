@@ -15,17 +15,17 @@
  * limitations under the License.
  */
 
-import { Android } from "./android";
-import { Browser } from "./browser";
-import { BrowserType } from "./browserType";
-import { ChannelOwner } from "./channelOwner";
-import { Electron } from "./electron";
-import { TimeoutError } from "./errors";
-import { APIRequest } from "./fetch";
-import { Selectors } from "./selectors";
+import { Android } from './android';
+import { Browser } from './browser';
+import { BrowserType } from './browserType';
+import { ChannelOwner } from './channelOwner';
+import { Electron } from './electron';
+import { TimeoutError } from './errors';
+import { APIRequest } from './fetch';
+import { Selectors } from './selectors';
 
-import type * as channels from "../protocol/channels";
-import type { LaunchOptions } from "../../types/types";
+import type * as channels from '../protocol/channels';
+import type { LaunchOptions } from 'playwright-core';
 
 export class Playwright extends ChannelOwner<channels.PlaywrightChannel> {
   readonly _android: Android;
@@ -43,12 +43,7 @@ export class Playwright extends ChannelOwner<channels.PlaywrightChannel> {
   _defaultContextTimeout?: number;
   _defaultContextNavigationTimeout?: number;
 
-  constructor(
-    parent: ChannelOwner,
-    type: string,
-    guid: string,
-    initializer: channels.PlaywrightInitializer
-  ) {
+  constructor(parent: ChannelOwner, type: string, guid: string, initializer: channels.PlaywrightInitializer) {
     super(parent, type, guid, initializer);
     this.request = new APIRequest(this);
     this.chromium = BrowserType.from(initializer.chromium);
@@ -76,19 +71,15 @@ export class Playwright extends ChannelOwner<channels.PlaywrightChannel> {
 
   _preLaunchedBrowser(): Browser {
     const browser = Browser.from(this._initializer.preLaunchedBrowser!);
-    browser._connectToBrowserType(
-      this[browser._name as "chromium" | "firefox" | "webkit"],
-      {},
-      undefined
-    );
+    browser._connectToBrowserType(this[browser._name as 'chromium' | 'firefox' | 'webkit'], {}, undefined);
     return browser;
   }
 
   _allContexts() {
-    return this._browserTypes().flatMap((type) => [...type._contexts]);
+    return this._browserTypes().flatMap(type => [...type._contexts]);
   }
 
   _allPages() {
-    return this._allContexts().flatMap((context) => context.pages());
+    return this._allContexts().flatMap(context => context.pages());
   }
 }

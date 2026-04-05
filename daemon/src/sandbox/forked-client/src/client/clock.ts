@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-import type { BrowserContext } from "./browserContext";
-import type * as api from "../../types/types";
+import type { BrowserContext } from './browserContext';
+import type * as api from '../../types/types';
 
 export class Clock implements api.Clock {
   private _browserContext: BrowserContext;
@@ -25,10 +25,8 @@ export class Clock implements api.Clock {
     this._browserContext = browserContext;
   }
 
-  async install(options: { time?: number | string | Date } = {}) {
-    await this._browserContext._channel.clockInstall(
-      options.time !== undefined ? parseTime(options.time) : {}
-    );
+  async install(options: { time?: number | string | Date } = { }) {
+    await this._browserContext._channel.clockInstall(options.time !== undefined ? parseTime(options.time) : {});
   }
 
   async fastForward(ticks: number | string) {
@@ -56,16 +54,19 @@ export class Clock implements api.Clock {
   }
 }
 
-function parseTime(time: string | number | Date): { timeNumber?: number; timeString?: string } {
-  if (typeof time === "number") return { timeNumber: time };
-  if (typeof time === "string") return { timeString: time };
-  if (!isFinite(time.getTime())) throw new Error(`Invalid date: ${time}`);
+function parseTime(time: string | number | Date): { timeNumber?: number, timeString?: string } {
+  if (typeof time === 'number')
+    return { timeNumber: time };
+  if (typeof time === 'string')
+    return { timeString: time };
+  if (!isFinite(time.getTime()))
+    throw new Error(`Invalid date: ${time}`);
   return { timeNumber: time.getTime() };
 }
 
-function parseTicks(ticks: string | number): { ticksNumber?: number; ticksString?: string } {
+function parseTicks(ticks: string | number): { ticksNumber?: number, ticksString?: string } {
   return {
-    ticksNumber: typeof ticks === "number" ? ticks : undefined,
-    ticksString: typeof ticks === "string" ? ticks : undefined,
+    ticksNumber: typeof ticks === 'number' ? ticks : undefined,
+    ticksString: typeof ticks === 'string' ? ticks : undefined
   };
 }

@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-import { evaluationScript } from "./clientHelper";
-import { setTestIdAttribute } from "./locator";
+import { evaluationScript } from './clientHelper';
+import { setTestIdAttribute } from './locator';
 
-import type { SelectorEngine } from "./types";
-import type * as api from "../../types/types";
-import type * as channels from "../protocol/channels";
-import type { BrowserContext } from "./browserContext";
-import type { Platform } from "./platform";
+import type { SelectorEngine } from './types';
+import type * as api from '../../types/types';
+import type * as channels from '../protocol/channels';
+import type { BrowserContext } from './browserContext';
+import type { Platform } from './platform';
 
 export class Selectors implements api.Selectors {
   private _platform: Platform;
@@ -34,12 +34,8 @@ export class Selectors implements api.Selectors {
     this._platform = platform;
   }
 
-  async register(
-    name: string,
-    script: string | (() => SelectorEngine) | { path?: string; content?: string },
-    options: { contentScript?: boolean } = {}
-  ): Promise<void> {
-    if (this._selectorEngines.some((engine) => engine.name === name))
+  async register(name: string, script: string | (() => SelectorEngine) | { path?: string, content?: string }, options: { contentScript?: boolean } = {}): Promise<void> {
+    if (this._selectorEngines.some(engine => engine.name === name))
       throw new Error(`selectors.register: "${name}" selector engine has been already registered`);
 
     const source = await evaluationScript(this._platform, script, undefined, false);
@@ -54,17 +50,11 @@ export class Selectors implements api.Selectors {
     setTestIdAttribute(attributeName);
     for (const context of this._contextsForSelectors) {
       context._options.testIdAttributeName = attributeName;
-      context._channel
-        .setTestIdAttributeName({ testIdAttributeName: attributeName })
-        .catch(() => {});
+      context._channel.setTestIdAttributeName({ testIdAttributeName: attributeName }).catch(() => {});
     }
   }
 
   _withSelectorOptions<T>(options: T) {
-    return {
-      ...options,
-      selectorEngines: this._selectorEngines,
-      testIdAttributeName: this._testIdAttributeName,
-    };
+    return { ...options, selectorEngines: this._selectorEngines, testIdAttributeName: this._testIdAttributeName };
   }
 }

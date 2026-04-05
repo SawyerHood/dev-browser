@@ -21,18 +21,27 @@
 
 /* eslint-disable no-restricted-globals */
 
-const fallbackTimeOrigin = Date.now();
-const performanceApi = globalThis.performance ?? {
-  timeOrigin: fallbackTimeOrigin,
-  now: () => Date.now() - fallbackTimeOrigin,
-};
+const performanceObject = (() => {
+  if (
+    typeof globalThis.performance?.now === 'function' &&
+    typeof globalThis.performance?.timeOrigin === 'number'
+  ) {
+    return globalThis.performance;
+  }
 
-let _timeOrigin = performanceApi.timeOrigin;
+  const origin = Date.now();
+  return {
+    timeOrigin: origin,
+    now: () => Date.now() - origin,
+  };
+})();
+
+let _timeOrigin = performanceObject.timeOrigin;
 let _timeShift = 0;
 
 export function setTimeOrigin(origin: number) {
   _timeOrigin = origin;
-  _timeShift = performanceApi.timeOrigin - origin;
+  _timeShift = performanceObject.timeOrigin - origin;
 }
 
 export function timeOrigin(): number {
@@ -40,7 +49,7 @@ export function timeOrigin(): number {
 }
 
 export function monotonicTime(): number {
-  return Math.floor((performanceApi.now() + _timeShift) * 1000) / 1000;
+  return Math.floor((performanceObject.now() + _timeShift) * 1000) / 1000;
 }
 
 export const DEFAULT_PLAYWRIGHT_TIMEOUT = 30_000;

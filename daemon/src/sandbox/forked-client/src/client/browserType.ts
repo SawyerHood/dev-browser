@@ -15,24 +15,19 @@
  * limitations under the License.
  */
 
-import { Browser } from "./browser";
-import { BrowserContext, prepareBrowserContextParams } from "./browserContext";
-import { ChannelOwner } from "./channelOwner";
-import { envObjectToArray } from "./clientHelper";
-import { assert } from "../utils/isomorphic/assert";
-import { headersObjectToArray } from "../utils/isomorphic/headers";
-import { TimeoutSettings } from "./timeoutSettings";
+import { Browser } from './browser';
+import { BrowserContext, prepareBrowserContextParams } from './browserContext';
+import { ChannelOwner } from './channelOwner';
+import { envObjectToArray } from './clientHelper';
+import { assert } from '../utils/isomorphic/assert';
+import { headersObjectToArray } from '../utils/isomorphic/headers';
+import { TimeoutSettings } from './timeoutSettings';
 
-import type { Playwright } from "./playwright";
-import type {
-  ConnectOptions,
-  LaunchOptions,
-  LaunchPersistentContextOptions,
-  LaunchServerOptions,
-} from "./types";
-import type * as api from "../../types/types";
-import type * as channels from "../protocol/channels";
-import type { ChildProcess } from "child_process";
+import type { Playwright } from './playwright';
+import type { ConnectOptions, LaunchOptions, LaunchPersistentContextOptions, LaunchServerOptions } from './types';
+import type * as api from '../../types/types';
+import type * as channels from '../protocol/channels';
+import type { ChildProcess } from 'child_process';
 
 export interface BrowserServerLauncher {
   launchServer(options?: LaunchServerOptions): Promise<api.BrowserServer>;
@@ -46,10 +41,7 @@ export interface BrowserServer extends api.BrowserServer {
   kill(): Promise<void>;
 }
 
-export class BrowserType
-  extends ChannelOwner<channels.BrowserTypeChannel>
-  implements api.BrowserType
-{
+export class BrowserType extends ChannelOwner<channels.BrowserTypeChannel> implements api.BrowserType {
   _serverLauncher?: BrowserServerLauncher;
   _contexts = new Set<BrowserContext>();
   _playwright!: Playwright;
@@ -60,7 +52,7 @@ export class BrowserType
 
   executablePath(): string {
     if (!this._initializer.executablePath)
-      throw new Error("Browser is not supported on current platform");
+      throw new Error('Browser is not supported on current platform');
     return this._initializer.executablePath;
   }
 
@@ -69,21 +61,15 @@ export class BrowserType
   }
 
   async launch(options: LaunchOptions = {}): Promise<Browser> {
-    assert(
-      !(options as any).userDataDir,
-      "userDataDir option is not supported in `browserType.launch`. Use `browserType.launchPersistentContext` instead"
-    );
-    assert(!(options as any).port, "Cannot specify a port without launching as a server.");
+    assert(!(options as any).userDataDir, 'userDataDir option is not supported in `browserType.launch`. Use `browserType.launchPersistentContext` instead');
+    assert(!(options as any).port, 'Cannot specify a port without launching as a server.');
 
     const logger = options.logger || this._playwright._defaultLaunchOptions?.logger;
     options = { ...this._playwright._defaultLaunchOptions, ...options };
     const launchOptions: channels.BrowserTypeLaunchParams = {
       ...options,
-      ignoreDefaultArgs: Array.isArray(options.ignoreDefaultArgs)
-        ? options.ignoreDefaultArgs
-        : undefined,
-      ignoreAllDefaultArgs:
-        !!options.ignoreDefaultArgs && !Array.isArray(options.ignoreDefaultArgs),
+      ignoreDefaultArgs: Array.isArray(options.ignoreDefaultArgs) ? options.ignoreDefaultArgs : undefined,
+      ignoreAllDefaultArgs: !!options.ignoreDefaultArgs && !Array.isArray(options.ignoreDefaultArgs),
       env: options.env ? envObjectToArray(options.env) : undefined,
       timeout: new TimeoutSettings(this._platform).launchTimeout(options),
     };
@@ -95,66 +81,45 @@ export class BrowserType
   }
 
   async launchServer(options: LaunchServerOptions = {}): Promise<api.BrowserServer> {
-    if (!this._serverLauncher) throw new Error("Launching server is not supported");
+    if (!this._serverLauncher)
+      throw new Error('Launching server is not supported');
     options = { ...this._playwright._defaultLaunchOptions, ...options };
     return await this._serverLauncher.launchServer(options);
   }
 
-  async launchPersistentContext(
-    userDataDir: string,
-    options: LaunchPersistentContextOptions = {}
-  ): Promise<BrowserContext> {
+  async launchPersistentContext(userDataDir: string, options: LaunchPersistentContextOptions = {}): Promise<BrowserContext> {
     void userDataDir;
     void options;
-    throw new Error(
-      "browserType.launchPersistentContext() is not available in the QuickJS sandbox"
-    );
+    throw new Error('browserType.launchPersistentContext() is not available in the QuickJS sandbox');
   }
 
   connect(options: api.ConnectOptions & { wsEndpoint: string }): Promise<Browser>;
   connect(endpoint: string, options?: api.ConnectOptions): Promise<Browser>;
-  async connect(
-    optionsOrEndpoint: string | (api.ConnectOptions & { wsEndpoint?: string }),
-    options?: api.ConnectOptions
-  ): Promise<Browser> {
-    if (typeof optionsOrEndpoint === "string")
+  async connect(optionsOrEndpoint: string | (api.ConnectOptions & { wsEndpoint?: string }), options?: api.ConnectOptions): Promise<Browser>{
+    if (typeof optionsOrEndpoint === 'string')
       return await this._connect({ ...options, endpoint: optionsOrEndpoint });
-    assert(optionsOrEndpoint.wsEndpoint, "options.wsEndpoint is required");
+    assert(optionsOrEndpoint.wsEndpoint, 'options.wsEndpoint is required');
     return await this._connect({ ...options, endpoint: optionsOrEndpoint.wsEndpoint });
   }
 
   async _connect(params: ConnectOptions): Promise<Browser> {
     void params;
-    throw new Error("browserType.connect() is not available in the QuickJS sandbox");
+    throw new Error('browserType.connect() is not available in the QuickJS sandbox');
   }
 
-  async connectOverCDP(
-    options: api.ConnectOverCDPOptions & { wsEndpoint?: string }
-  ): Promise<api.Browser>;
-  async connectOverCDP(
-    endpointURL: string,
-    options?: api.ConnectOverCDPOptions
-  ): Promise<api.Browser>;
-  async connectOverCDP(
-    endpointURLOrOptions: (api.ConnectOverCDPOptions & { wsEndpoint?: string }) | string,
-    options?: api.ConnectOverCDPOptions
-  ) {
-    if (typeof endpointURLOrOptions === "string")
+  async connectOverCDP(options: api.ConnectOverCDPOptions  & { wsEndpoint?: string }): Promise<api.Browser>;
+  async connectOverCDP(endpointURL: string, options?: api.ConnectOverCDPOptions): Promise<api.Browser>;
+  async connectOverCDP(endpointURLOrOptions: (api.ConnectOverCDPOptions & { wsEndpoint?: string })|string, options?: api.ConnectOverCDPOptions) {
+    if (typeof endpointURLOrOptions === 'string')
       return await this._connectOverCDP(endpointURLOrOptions, options);
-    const endpointURL =
-      "endpointURL" in endpointURLOrOptions
-        ? endpointURLOrOptions.endpointURL
-        : endpointURLOrOptions.wsEndpoint;
-    assert(endpointURL, "Cannot connect over CDP without wsEndpoint.");
+    const endpointURL = 'endpointURL' in endpointURLOrOptions ? endpointURLOrOptions.endpointURL : endpointURLOrOptions.wsEndpoint;
+    assert(endpointURL, 'Cannot connect over CDP without wsEndpoint.');
     return await this.connectOverCDP(endpointURL, endpointURLOrOptions);
   }
 
-  async _connectOverCDP(
-    endpointURL: string,
-    params: api.ConnectOverCDPOptions = {}
-  ): Promise<Browser> {
-    if (this.name() !== "chromium")
-      throw new Error("Connecting over CDP is only supported in Chromium.");
+  async _connectOverCDP(endpointURL: string, params: api.ConnectOverCDPOptions = {}): Promise<Browser>  {
+    if (this.name() !== 'chromium')
+      throw new Error('Connecting over CDP is only supported in Chromium.');
     const headers = params.headers ? headersObjectToArray(params.headers) : undefined;
     const result = await this._channel.connectOverCDP({
       endpointURL,
@@ -166,22 +131,18 @@ export class BrowserType
     const browser = Browser.from(result.browser);
     browser._connectToBrowserType(this, {}, params.logger);
     if (result.defaultContext)
-      await this._instrumentation.runAfterCreateBrowserContext(
-        BrowserContext.from(result.defaultContext)
-      );
+      await this._instrumentation.runAfterCreateBrowserContext(BrowserContext.from(result.defaultContext));
     return browser;
   }
 
   async _connectOverCDPTransport(transport: /* ConnectionTransport */ any) {
-    if (this.name() !== "chromium")
-      throw new Error("Connecting over CDP is only supported in Chromium.");
+    if (this.name() !== 'chromium')
+      throw new Error('Connecting over CDP is only supported in Chromium.');
     const result = await this._channel.connectOverCDPTransport({ transport });
     const browser = Browser.from(result.browser);
     browser._connectToBrowserType(this, {}, undefined);
     if (result.defaultContext)
-      await this._instrumentation.runAfterCreateBrowserContext(
-        BrowserContext.from(result.defaultContext)
-      );
+      await this._instrumentation.runAfterCreateBrowserContext(BrowserContext.from(result.defaultContext));
     return browser;
   }
 }

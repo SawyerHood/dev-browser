@@ -16,12 +16,9 @@
  * limitations under the License.
  */
 
-import {
-  DEFAULT_PLAYWRIGHT_LAUNCH_TIMEOUT,
-  DEFAULT_PLAYWRIGHT_TIMEOUT,
-} from "../utils/isomorphic/time";
+import { DEFAULT_PLAYWRIGHT_LAUNCH_TIMEOUT, DEFAULT_PLAYWRIGHT_TIMEOUT } from '../utils/isomorphic/time';
 
-import type { Platform } from "./platform";
+import type { Platform } from './platform';
 
 export class TimeoutSettings {
   private _parent: TimeoutSettings | undefined;
@@ -51,26 +48,38 @@ export class TimeoutSettings {
   }
 
   navigationTimeout(options: { timeout?: number }): number {
-    if (typeof options.timeout === "number") return options.timeout;
-    if (this._defaultNavigationTimeout !== undefined) return this._defaultNavigationTimeout;
-    if (this._platform.isDebugMode()) return 0;
-    if (this._defaultTimeout !== undefined) return this._defaultTimeout;
-    if (this._parent) return this._parent.navigationTimeout(options);
+    if (typeof options.timeout === 'number')
+      return options.timeout;
+    if (this._defaultNavigationTimeout !== undefined)
+      return this._defaultNavigationTimeout;
+    if (this._platform.isDebugMode())
+      return 0;
+    if (this._defaultTimeout !== undefined)
+      return this._defaultTimeout;
+    if (this._parent)
+      return this._parent.navigationTimeout(options);
     return DEFAULT_PLAYWRIGHT_TIMEOUT;
   }
 
   timeout(options: { timeout?: number }): number {
-    if (typeof options.timeout === "number") return options.timeout;
-    if (this._platform.isDebugMode()) return 0;
-    if (this._defaultTimeout !== undefined) return this._defaultTimeout;
-    if (this._parent) return this._parent.timeout(options);
+    if (typeof options.timeout === 'number')
+      return options.timeout;
+    if (this._platform.isDebugMode())
+      return 0;
+    if (this._defaultTimeout !== undefined)
+      return this._defaultTimeout;
+    if (this._parent)
+      return this._parent.timeout(options);
     return DEFAULT_PLAYWRIGHT_TIMEOUT;
   }
 
   launchTimeout(options: { timeout?: number }): number {
-    if (typeof options.timeout === "number") return options.timeout;
-    if (this._platform.isDebugMode()) return 0;
-    if (this._parent) return this._parent.launchTimeout(options);
+    if (typeof options.timeout === 'number')
+      return options.timeout;
+    if (this._platform.isDebugMode())
+      return 0;
+    if (this._parent)
+      return this._parent.launchTimeout(options);
     return DEFAULT_PLAYWRIGHT_LAUNCH_TIMEOUT;
   }
 }

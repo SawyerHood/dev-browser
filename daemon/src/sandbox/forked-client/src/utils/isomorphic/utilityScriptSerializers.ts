@@ -15,36 +15,22 @@
  * limitations under the License.
  */
 
-type TypedArrayKind =
-  | "i8"
-  | "ui8"
-  | "ui8c"
-  | "i16"
-  | "ui16"
-  | "i32"
-  | "ui32"
-  | "f32"
-  | "f64"
-  | "bi64"
-  | "bui64";
+type TypedArrayKind = 'i8' | 'ui8' | 'ui8c' | 'i16' | 'ui16' | 'i32' | 'ui32' | 'f32' | 'f64' | 'bi64' | 'bui64';
 
 export type SerializedValue =
-  | undefined
-  | boolean
-  | number
-  | string
-  | { v: "null" | "undefined" | "NaN" | "Infinity" | "-Infinity" | "-0" }
-  | { d: string }
-  | { u: string }
-  | { bi: string }
-  | { e: { n: string; m: string; s: string } }
-  | { r: { p: string; f: string } }
-  | { a: SerializedValue[]; id: number }
-  | { o: { k: string; v: SerializedValue }[]; id: number }
-  | { ref: number }
-  | { h: number }
-  | { ta: { b: string; k: TypedArrayKind } }
-  | { ab: { b: string } };
+    undefined | boolean | number | string |
+    { v: 'null' | 'undefined' | 'NaN' | 'Infinity' | '-Infinity' | '-0' } |
+    { d: string } |
+    { u: string } |
+    { bi: string } |
+    { e: { n: string, m: string, s: string } } |
+    { r: { p: string, f: string } } |
+    { a: SerializedValue[], id: number } |
+    { o: { k: string, v: SerializedValue }[], id: number } |
+    { ref: number } |
+    { h: number } |
+    { ta: { b: string, k: TypedArrayKind } } |
+    { ab: { b: string } };
 
 type HandleOrValue = { h: number } | { fallThrough: any };
 
@@ -55,7 +41,7 @@ type VisitorInfo = {
 
 function isRegExp(obj: any): obj is RegExp {
   try {
-    return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
+    return obj instanceof RegExp || Object.prototype.toString.call(obj) === '[object RegExp]';
   } catch (error) {
     return false;
   }
@@ -64,7 +50,7 @@ function isRegExp(obj: any): obj is RegExp {
 function isDate(obj: any): obj is Date {
   try {
     // eslint-disable-next-line no-restricted-globals
-    return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
+    return obj instanceof Date || Object.prototype.toString.call(obj) === '[object Date]';
   } catch (error) {
     return false;
   }
@@ -72,7 +58,7 @@ function isDate(obj: any): obj is Date {
 
 function isURL(obj: any): obj is URL {
   try {
-    return obj instanceof URL || Object.prototype.toString.call(obj) === "[object URL]";
+    return obj instanceof URL || Object.prototype.toString.call(obj) === '[object URL]';
   } catch (error) {
     return false;
   }
@@ -80,7 +66,7 @@ function isURL(obj: any): obj is URL {
 
 function isError(obj: any): obj is Error {
   try {
-    return obj instanceof Error || (obj && Object.getPrototypeOf(obj)?.name === "Error");
+    return obj instanceof Error || (obj && Object.getPrototypeOf(obj)?.name === 'Error');
   } catch (error) {
     return false;
   }
@@ -88,10 +74,7 @@ function isError(obj: any): obj is Error {
 
 function isTypedArray(obj: any, constructor: Function): boolean {
   try {
-    return (
-      obj instanceof constructor ||
-      Object.prototype.toString.call(obj) === `[object ${constructor.name}]`
-    );
+    return obj instanceof constructor || Object.prototype.toString.call(obj) === `[object ${constructor.name}]`;
   } catch (error) {
     return false;
   }
@@ -99,9 +82,7 @@ function isTypedArray(obj: any, constructor: Function): boolean {
 
 function isArrayBuffer(obj: any): obj is ArrayBuffer {
   try {
-    return (
-      obj instanceof ArrayBuffer || Object.prototype.toString.call(obj) === "[object ArrayBuffer]"
-    );
+    return obj instanceof ArrayBuffer || Object.prototype.toString.call(obj) === '[object ArrayBuffer]';
   } catch (error) {
     return false;
   }
@@ -127,123 +108,137 @@ function typedArrayToBase64(array: any) {
    * Firefox does not support iterating over typed arrays, so we use `.toBase64`.
    * Error: 'Accessing TypedArray data over Xrays is slow, and forbidden in order to encourage performant code. To copy TypedArrays across origin boundaries, consider using Components.utils.cloneInto().'
    */
-  if ("toBase64" in array) return array.toBase64();
-  const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength))
-    .map((b) => String.fromCharCode(b))
-    .join("");
+  if ('toBase64' in array)
+    return array.toBase64();
+  const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).map(b => String.fromCharCode(b)).join('');
   return btoa(binary);
 }
 
 function base64ToTypedArray(base64: string, TypedArrayConstructor: any) {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  for (let i = 0; i < binary.length; i++)
+    bytes[i] = binary.charCodeAt(i);
   return new TypedArrayConstructor(bytes.buffer);
 }
 
-export function parseEvaluationResultValue(
-  value: SerializedValue,
-  handles: any[] = [],
-  refs: Map<number, object> = new Map()
-): any {
-  if (Object.is(value, undefined)) return undefined;
-  if (typeof value === "object" && value) {
-    if ("ref" in value) return refs.get(value.ref);
-    if ("v" in value) {
-      if (value.v === "undefined") return undefined;
-      if (value.v === "null") return null;
-      if (value.v === "NaN") return NaN;
-      if (value.v === "Infinity") return Infinity;
-      if (value.v === "-Infinity") return -Infinity;
-      if (value.v === "-0") return -0;
+export function parseEvaluationResultValue(value: SerializedValue, handles: any[] = [], refs: Map<number, object> = new Map()): any {
+  if (Object.is(value, undefined))
+    return undefined;
+  if (typeof value === 'object' && value) {
+    if ('ref' in value)
+      return refs.get(value.ref);
+    if ('v' in value) {
+      if (value.v === 'undefined')
+        return undefined;
+      if (value.v === 'null')
+        return null;
+      if (value.v === 'NaN')
+        return NaN;
+      if (value.v === 'Infinity')
+        return Infinity;
+      if (value.v === '-Infinity')
+        return -Infinity;
+      if (value.v === '-0')
+        return -0;
       return undefined;
     }
-    if ("d" in value) {
+    if ('d' in value) {
       // eslint-disable-next-line no-restricted-globals
       return new Date(value.d);
     }
-    if ("u" in value) return new URL(value.u);
-    if ("bi" in value) return BigInt(value.bi);
-    if ("e" in value) {
+    if ('u' in value)
+      return new URL(value.u);
+    if ('bi' in value)
+      return BigInt(value.bi);
+    if ('e' in value) {
       const error = new Error(value.e.m);
       error.name = value.e.n;
       error.stack = value.e.s;
       return error;
     }
-    if ("r" in value) return new RegExp(value.r.p, value.r.f);
-    if ("a" in value) {
+    if ('r' in value)
+      return new RegExp(value.r.p, value.r.f);
+    if ('a' in value) {
       const result: any[] = [];
       refs.set(value.id, result);
-      for (const a of value.a) result.push(parseEvaluationResultValue(a, handles, refs));
+      for (const a of value.a)
+        result.push(parseEvaluationResultValue(a, handles, refs));
       return result;
     }
-    if ("o" in value) {
+    if ('o' in value) {
       const result: any = {};
       refs.set(value.id, result);
       for (const { k, v } of value.o) {
-        if (k === "__proto__") continue;
+        if (k === '__proto__')
+          continue;
         result[k] = parseEvaluationResultValue(v, handles, refs);
       }
       return result;
     }
-    if ("h" in value) return handles[value.h];
-    if ("ta" in value) return base64ToTypedArray(value.ta.b, typedArrayConstructors[value.ta.k]);
-    if ("ab" in value) return base64ToTypedArray(value.ab.b, Uint8Array).buffer;
+    if ('h' in value)
+      return handles[value.h];
+    if ('ta' in value)
+      return base64ToTypedArray(value.ta.b, typedArrayConstructors[value.ta.k]);
+    if ('ab' in value)
+      return base64ToTypedArray(value.ab.b, Uint8Array).buffer;
   }
   return value;
 }
 
-export function serializeAsCallArgument(
-  value: any,
-  handleSerializer: (value: any) => HandleOrValue
-): SerializedValue {
+export function serializeAsCallArgument(value: any, handleSerializer: (value: any) => HandleOrValue): SerializedValue {
   return serialize(value, handleSerializer, { visited: new Map(), lastId: 0 });
 }
 
-function serialize(
-  value: any,
-  handleSerializer: (value: any) => HandleOrValue,
-  visitorInfo: VisitorInfo
-): SerializedValue {
-  if (value && typeof value === "object") {
+function serialize(value: any, handleSerializer: (value: any) => HandleOrValue, visitorInfo: VisitorInfo): SerializedValue {
+  if (value && typeof value === 'object') {
     // eslint-disable-next-line no-restricted-globals
-    if (typeof globalThis.Window === "function" && value instanceof globalThis.Window)
-      return "ref: <Window>";
+    if (typeof globalThis.Window === 'function' && value instanceof globalThis.Window)
+      return 'ref: <Window>';
     // eslint-disable-next-line no-restricted-globals
-    if (typeof globalThis.Document === "function" && value instanceof globalThis.Document)
-      return "ref: <Document>";
+    if (typeof globalThis.Document === 'function' && value instanceof globalThis.Document)
+      return 'ref: <Document>';
     // eslint-disable-next-line no-restricted-globals
-    if (typeof globalThis.Node === "function" && value instanceof globalThis.Node)
-      return "ref: <Node>";
+    if (typeof globalThis.Node === 'function' && value instanceof globalThis.Node)
+      return 'ref: <Node>';
   }
   return innerSerialize(value, handleSerializer, visitorInfo);
 }
 
-function innerSerialize(
-  value: any,
-  handleSerializer: (value: any) => HandleOrValue,
-  visitorInfo: VisitorInfo
-): SerializedValue {
+function innerSerialize(value: any, handleSerializer: (value: any) => HandleOrValue, visitorInfo: VisitorInfo): SerializedValue {
   const result = handleSerializer(value);
-  if ("fallThrough" in result) value = result.fallThrough;
-  else return result;
+  if ('fallThrough' in result)
+    value = result.fallThrough;
+  else
+    return result;
 
-  if (typeof value === "symbol") return { v: "undefined" };
-  if (Object.is(value, undefined)) return { v: "undefined" };
-  if (Object.is(value, null)) return { v: "null" };
-  if (Object.is(value, NaN)) return { v: "NaN" };
-  if (Object.is(value, Infinity)) return { v: "Infinity" };
-  if (Object.is(value, -Infinity)) return { v: "-Infinity" };
-  if (Object.is(value, -0)) return { v: "-0" };
+  if (typeof value === 'symbol')
+    return { v: 'undefined' };
+  if (Object.is(value, undefined))
+    return { v: 'undefined' };
+  if (Object.is(value, null))
+    return { v: 'null' };
+  if (Object.is(value, NaN))
+    return { v: 'NaN' };
+  if (Object.is(value, Infinity))
+    return { v: 'Infinity' };
+  if (Object.is(value, -Infinity))
+    return { v: '-Infinity' };
+  if (Object.is(value, -0))
+    return { v: '-0' };
 
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value;
-  if (typeof value === "string") return value;
-  if (typeof value === "bigint") return { bi: value.toString() };
+  if (typeof value === 'boolean')
+    return value;
+  if (typeof value === 'number')
+    return value;
+  if (typeof value === 'string')
+    return value;
+  if (typeof value === 'bigint')
+    return { bi: value.toString() };
 
   if (isError(value)) {
     let stack;
-    if (value.stack?.startsWith(value.name + ": " + value.message)) {
+    if (value.stack?.startsWith(value.name + ': ' + value.message)) {
       // v8
       stack = value.stack;
     } else {
@@ -251,16 +246,22 @@ function innerSerialize(
     }
     return { e: { n: value.name, m: value.message, s: stack } };
   }
-  if (isDate(value)) return { d: value.toJSON() };
-  if (isURL(value)) return { u: value.toJSON() };
-  if (isRegExp(value)) return { r: { p: value.source, f: value.flags } };
+  if (isDate(value))
+    return { d: value.toJSON() };
+  if (isURL(value))
+    return { u: value.toJSON() };
+  if (isRegExp(value))
+    return { r: { p: value.source, f: value.flags } };
   for (const [k, ctor] of Object.entries(typedArrayConstructors) as [TypedArrayKind, Function][]) {
-    if (isTypedArray(value, ctor)) return { ta: { b: typedArrayToBase64(value), k } };
+    if (isTypedArray(value, ctor))
+      return { ta: { b: typedArrayToBase64(value), k } };
   }
-  if (isArrayBuffer(value)) return { ab: { b: typedArrayToBase64(new Uint8Array(value)) } };
+  if (isArrayBuffer(value))
+    return { ab: { b: typedArrayToBase64(new Uint8Array(value)) } };
 
   const id = visitorInfo.visited.get(value);
-  if (id) return { ref: id };
+  if (id)
+    return { ref: id };
 
   if (Array.isArray(value)) {
     const a = [];
@@ -271,8 +272,8 @@ function innerSerialize(
     return { a, id };
   }
 
-  if (typeof value === "object") {
-    const o: { k: string; v: SerializedValue }[] = [];
+  if (typeof value === 'object') {
+    const o: { k: string, v: SerializedValue }[] = [];
     const id = ++visitorInfo.lastId;
     visitorInfo.visited.set(value, id);
     for (const name of Object.keys(value)) {
@@ -280,19 +281,23 @@ function innerSerialize(
       try {
         item = value[name];
       } catch (e) {
-        continue; // native bindings will throw sometimes
+        continue;  // native bindings will throw sometimes
       }
-      if (name === "toJSON" && typeof item === "function") o.push({ k: name, v: { o: [], id: 0 } });
-      else o.push({ k: name, v: serialize(item, handleSerializer, visitorInfo) });
+      if (name === 'toJSON' && typeof item === 'function')
+        o.push({ k: name, v: { o: [], id: 0 } });
+      else
+        o.push({ k: name, v: serialize(item, handleSerializer, visitorInfo) });
     }
 
     let jsonWrapper;
     try {
       // If Object.keys().length === 0 we fall back to toJSON if it exists
-      if (o.length === 0 && value.toJSON && typeof value.toJSON === "function")
+      if (o.length === 0 && value.toJSON && typeof value.toJSON === 'function')
         jsonWrapper = { value: value.toJSON() };
-    } catch (e) {}
-    if (jsonWrapper) return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);
+    } catch (e) {
+    }
+    if (jsonWrapper)
+      return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);
 
     return { o, id };
   }

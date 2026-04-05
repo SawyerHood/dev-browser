@@ -48,7 +48,6 @@ export const quickjsPlatform: Platform = {
   streamFile: () => unsupported("streamFile"),
   streamReadable: () => unsupported("streamReadable"),
   streamWritable: () => unsupported("streamWritable"),
-  zodToJsonSchema: () => unsupported("zodToJsonSchema"),
   zones: {
     empty: noopZone,
     current: () => noopZone,

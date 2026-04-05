@@ -15,11 +15,13 @@
  * limitations under the License.
  */
 
-import { ChannelOwner } from "./channelOwner";
-import { Page } from "./page";
+import { ChannelOwner } from './channelOwner';
+import { Page } from './page';
+import { isTargetClosedError } from './errors';
 
-import type * as api from "../../types/types";
-import type * as channels from "../protocol/channels";
+import type * as api from '../../types/types';
+import type * as channels from '../protocol/channels';
+
 
 export class Dialog extends ChannelOwner<channels.DialogChannel> implements api.Dialog {
   static from(dialog: channels.DialogChannel): Dialog {
@@ -28,12 +30,7 @@ export class Dialog extends ChannelOwner<channels.DialogChannel> implements api.
 
   private _page: Page | null;
 
-  constructor(
-    parent: ChannelOwner,
-    type: string,
-    guid: string,
-    initializer: channels.DialogInitializer
-  ) {
+  constructor(parent: ChannelOwner, type: string, guid: string, initializer: channels.DialogInitializer) {
     super(parent, type, guid, initializer);
     // Note: dialogs that open early during page initialization block it.
     // Therefore, we must report the dialog without a page to be able to handle it.
@@ -61,6 +58,12 @@ export class Dialog extends ChannelOwner<channels.DialogChannel> implements api.
   }
 
   async dismiss() {
-    await this._channel.dismiss();
+    try {
+      await this._channel.dismiss();
+    } catch (e) {
+      if (isTargetClosedError(e))
+        return;
+      throw e;
+    }
   }
 }

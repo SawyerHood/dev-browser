@@ -41,12 +41,10 @@ export class MultiMap<K, V> {
 
   delete(key: K, value: V) {
     const values = this._map.get(key);
-    if (!values) return;
+    if (!values)
+      return;
     if (values.includes(value))
-      this._map.set(
-        key,
-        values.filter((v) => value !== v)
-      );
+      this._map.set(key, values.filter(v => value !== v));
   }
 
   deleteAll(key: K) {
@@ -55,7 +53,8 @@ export class MultiMap<K, V> {
 
   hasValue(key: K, value: V): boolean {
     const values = this._map.get(key);
-    if (!values) return false;
+    if (!values)
+      return false;
     return values.includes(value);
   }
 
@@ -73,7 +72,8 @@ export class MultiMap<K, V> {
 
   values(): Iterable<V> {
     const result: V[] = [];
-    for (const key of this.keys()) result.push(...this.get(key));
+    for (const key of this.keys())
+      result.push(...this.get(key));
     return result;
   }
 

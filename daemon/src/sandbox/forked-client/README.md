@@ -48,19 +48,20 @@ The fork lets dev-browser keep the Playwright object model and protocol semantic
 
 ## Source version and provenance
 
-The provenance markers for this fork do not fully agree, so treat this directory as the source of truth.
+This fork now tracks Playwright `v1.59.1` from the official upstream repository.
 
 - `../../../package.json` declares:
 
 ```json
-"playwright": "^1.52.0",
-"playwright-core": "^1.52.0"
+"playwright": "1.59.1",
+"playwright-core": "1.59.1"
 ```
 
-- The research notes at `/Users/sawyerhood/.middleman/notes/dev-browser/research/playwright-fork-sandbox.md` record upstream commit `3912da7`.
-- In practice, the checked-in fork aligns most closely with that `3912da7` snapshot, with local edits layered on top.
+- The vendored client files in this directory were refreshed from upstream tag `v1.59.1`.
+- That tag resolves to commit `d466ac5358cae058cdc75d2ae3ab3ad220042730`.
+- The older research notes at `/Users/sawyerhood/.middleman/notes/dev-browser/research/playwright-fork-sandbox.md` refer to an earlier snapshot and should be treated as historical context only.
 
-When updating, diff against the exact upstream tag or commit you choose. Do not trust the semver range in `../../../package.json` by itself.
+When updating, diff against the exact upstream tag or commit you choose. Keep the pinned package version and the vendored fork in sync.
 
 Upstream path mapping for this fork:
 
@@ -305,7 +306,7 @@ That is why `browserType.connect()` is stubbed even though the sandbox still has
 
 1. Clone Playwright at the exact target tag or commit you want to adopt.
 
-   Do not rely only on the `^1.52.0` range in `../../../package.json`. Pick one concrete upstream revision first.
+   Do not rely only on `../../../package.json`. Pick one concrete upstream revision first.
 
 2. Diff the upstream files against this directory.
 

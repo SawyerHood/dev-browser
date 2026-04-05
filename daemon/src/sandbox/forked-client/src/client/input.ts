@@ -16,9 +16,9 @@
  * limitations under the License.
  */
 
-import type { Page } from "./page";
-import type * as api from "../../types/types";
-import type * as channels from "../protocol/channels";
+import type { Page } from './page';
+import type * as api from '../../types/types';
+import type * as channels from '../protocol/channels';
 
 export class Keyboard implements api.Keyboard {
   private _page: Page;
@@ -71,17 +71,10 @@ export class Mouse implements api.Mouse {
     await this._page._channel.mouseClick({ x, y, ...options });
   }
 
-  async dblclick(
-    x: number,
-    y: number,
-    options: Omit<channels.PageMouseClickOptions, "clickCount"> = {}
-  ) {
-    await this._page._wrapApiCall(
-      async () => {
-        await this.click(x, y, { ...options, clickCount: 2 });
-      },
-      { title: "Double click" }
-    );
+  async dblclick(x: number, y: number, options: Omit<channels.PageMouseClickOptions, 'clickCount'> = {}) {
+    await this._page._wrapApiCall(async () => {
+      await this.click(x, y, { ...options, clickCount: 2 });
+    }, { title: 'Double click' });
   }
 
   async wheel(deltaX: number, deltaY: number) {

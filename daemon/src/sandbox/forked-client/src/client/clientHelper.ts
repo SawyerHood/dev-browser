@@ -16,40 +16,40 @@
  * limitations under the License.
  */
 
-import { isString } from "../utils/isomorphic/rtti";
+import { isString } from '../utils/isomorphic/rtti';
 
-import type { Platform } from "./platform";
+import type { Platform } from './platform';
 
-export function envObjectToArray(env: NodeJS.ProcessEnv): { name: string; value: string }[] {
-  const result: { name: string; value: string }[] = [];
+export function envObjectToArray(env: NodeJS.ProcessEnv): { name: string, value: string }[] {
+  const result: { name: string, value: string }[] = [];
   for (const name in env) {
-    if (!Object.is(env[name], undefined)) result.push({ name, value: String(env[name]) });
+    if (!Object.is(env[name], undefined))
+      result.push({ name, value: String(env[name]) });
   }
   return result;
 }
 
-export async function evaluationScript(
-  platform: Platform,
-  fun: Function | string | { path?: string; content?: string },
-  arg?: any,
-  addSourceUrl: boolean = true
-): Promise<string> {
-  if (typeof fun === "function") {
+export async function evaluationScript(platform: Platform, fun: Function | string | { path?: string, content?: string }, arg?: any, addSourceUrl: boolean = true): Promise<string> {
+  if (typeof fun === 'function') {
     const source = fun.toString();
-    const argString = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
+    const argString = Object.is(arg, undefined) ? 'undefined' : JSON.stringify(arg);
     return `(${source})(${argString})`;
   }
-  if (arg !== undefined) throw new Error("Cannot evaluate a string with arguments");
-  if (isString(fun)) return fun;
-  if (fun.content !== undefined) return fun.content;
+  if (arg !== undefined)
+    throw new Error('Cannot evaluate a string with arguments');
+  if (isString(fun))
+    return fun;
+  if (fun.content !== undefined)
+    return fun.content;
   if (fun.path !== undefined) {
-    let source = await platform.fs().promises.readFile(fun.path, "utf8");
-    if (addSourceUrl) source = addSourceUrlToScript(source, fun.path);
+    let source = await platform.fs().promises.readFile(fun.path, 'utf8');
+    if (addSourceUrl)
+      source = addSourceUrlToScript(source, fun.path);
     return source;
   }
-  throw new Error("Either path or content property must be present");
+  throw new Error('Either path or content property must be present');
 }
 
 export function addSourceUrlToScript(source: string, path: string): string {
-  return `${source}\n//# sourceURL=${path.replace(/\n/g, "")}`;
+  return `${source}\n//# sourceURL=${path.replace(/\n/g, '')}`;
 }

@@ -17,7 +17,7 @@
 
 export class LRUCache<K, V> {
   private _maxSize: number;
-  private _map: Map<K, { value: V; size: number }>;
+  private _map: Map<K, { value: V, size: number }>;
   private _size: number;
 
   constructor(maxSize: number) {
@@ -26,7 +26,7 @@ export class LRUCache<K, V> {
     this._size = 0;
   }
 
-  getOrCompute(key: K, compute: () => { value: V; size: number }): V {
+  getOrCompute(key: K, compute: () => { value: V, size: number }): V {
     if (this._map.has(key)) {
       const result = this._map.get(key)!;
       // reinserting makes this the least recently used entry

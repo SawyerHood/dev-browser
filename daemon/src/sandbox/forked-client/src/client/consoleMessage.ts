@@ -15,31 +15,28 @@
  * limitations under the License.
  */
 
-import { JSHandle } from "./jsHandle";
+import { JSHandle } from './jsHandle';
 
-import type * as api from "../../types/types";
-import type { Platform } from "./platform";
-import type * as channels from "../protocol/channels";
-import type { Page } from "./page";
-import type { Worker } from "./worker";
+import type * as api from '../../types/types';
+import type { Platform } from './platform';
+import type * as channels from '../protocol/channels';
+import type { Page } from './page';
+import type { Worker } from './worker';
 
-type ConsoleMessageLocation = channels.BrowserContextConsoleEvent["location"];
+type ConsoleMessageLocation = channels.BrowserContextConsoleEvent['location'];
 
 export class ConsoleMessage implements api.ConsoleMessage {
+
   private _page: Page | null;
   private _worker: Worker | null;
   private _event: channels.BrowserContextConsoleEvent | channels.ElectronApplicationConsoleEvent;
 
-  constructor(
-    platform: Platform,
-    event: channels.BrowserContextConsoleEvent | channels.ElectronApplicationConsoleEvent,
-    page: Page | null,
-    worker: Worker | null
-  ) {
+  constructor(platform: Platform, event: channels.BrowserContextConsoleEvent | channels.ElectronApplicationConsoleEvent, page: Page | null, worker: Worker | null) {
     this._page = page;
     this._worker = worker;
     this._event = event;
-    if (platform.inspectCustom) (this as any)[platform.inspectCustom] = () => this._inspect();
+    if (platform.inspectCustom)
+      (this as any)[platform.inspectCustom] = () => this._inspect();
   }
 
   worker() {
@@ -50,8 +47,8 @@ export class ConsoleMessage implements api.ConsoleMessage {
     return this._page;
   }
 
-  type(): ReturnType<api.ConsoleMessage["type"]> {
-    return this._event.type as ReturnType<api.ConsoleMessage["type"]>;
+  type(): ReturnType<api.ConsoleMessage['type']> {
+    return this._event.type as ReturnType<api.ConsoleMessage['type']>;
   }
 
   text(): string {

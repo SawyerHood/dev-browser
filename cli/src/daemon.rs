@@ -19,8 +19,8 @@ const EMBEDDED_PACKAGE_JSON: &str = r#"{
   "private": true,
   "type": "module",
   "dependencies": {
-    "playwright": "1.58.2",
-    "playwright-core": "1.58.2",
+    "playwright": "1.59.1",
+    "playwright-core": "1.59.1",
     "quickjs-emscripten": "^0.32.0"
   }
 }"#;

@@ -15,53 +15,35 @@
  * limitations under the License.
  */
 
-import { ChannelOwner } from "./channelOwner";
-import { isTargetClosedError } from "./errors";
-import { parseSerializedValue, serializeValue } from "../protocol/serializers";
+import { ChannelOwner } from './channelOwner';
+import { isTargetClosedError } from './errors';
+import { parseSerializedValue, serializeValue } from '../protocol/serializers';
 
-import type * as structs from "../../types/structs";
-import type * as api from "../../types/types";
-import type * as channels from "../protocol/channels";
+import type * as structs from '../../types/structs';
+import type * as api from '../../types/types';
+import type * as channels from '../protocol/channels';
 
-export class JSHandle<T = any>
-  extends ChannelOwner<channels.JSHandleChannel>
-  implements api.JSHandle
-{
+
+export class JSHandle<T = any> extends ChannelOwner<channels.JSHandleChannel> implements api.JSHandle {
   private _preview: string;
 
   static from(handle: channels.JSHandleChannel): JSHandle {
     return (handle as any)._object;
   }
 
-  constructor(
-    parent: ChannelOwner,
-    type: string,
-    guid: string,
-    initializer: channels.JSHandleInitializer
-  ) {
+  constructor(parent: ChannelOwner, type: string, guid: string, initializer: channels.JSHandleInitializer) {
     super(parent, type, guid, initializer);
     this._preview = this._initializer.preview;
-    this._channel.on("previewUpdated", ({ preview }) => (this._preview = preview));
+    this._channel.on('previewUpdated', ({ preview }) => this._preview = preview);
   }
 
   async evaluate<R, Arg>(pageFunction: structs.PageFunctionOn<T, Arg, R>, arg?: Arg): Promise<R> {
-    const result = await this._channel.evaluateExpression({
-      expression: String(pageFunction),
-      isFunction: typeof pageFunction === "function",
-      arg: serializeArgument(arg),
-    });
+    const result = await this._channel.evaluateExpression({ expression: String(pageFunction), isFunction: typeof pageFunction === 'function', arg: serializeArgument(arg) });
     return parseResult(result.value);
   }
 
-  async evaluateHandle<R, Arg>(
-    pageFunction: structs.PageFunctionOn<T, Arg, R>,
-    arg?: Arg
-  ): Promise<structs.SmartHandle<R>> {
-    const result = await this._channel.evaluateExpressionHandle({
-      expression: String(pageFunction),
-      isFunction: typeof pageFunction === "function",
-      arg: serializeArgument(arg),
-    });
+  async evaluateHandle<R, Arg>(pageFunction: structs.PageFunctionOn<T, Arg, R>, arg?: Arg): Promise<structs.SmartHandle<R>> {
+    const result = await this._channel.evaluateExpressionHandle({ expression: String(pageFunction), isFunction: typeof pageFunction === 'function', arg: serializeArgument(arg) });
     return JSHandle.from(result.handle) as any as structs.SmartHandle<R>;
   }
 
@@ -93,7 +75,8 @@ export class JSHandle<T = any>
     try {
       await this._channel.dispose();
     } catch (e) {
-      if (isTargetClosedError(e)) return;
+      if (isTargetClosedError(e))
+        return;
       throw e;
     }
   }
@@ -111,8 +94,9 @@ export function serializeArgument(arg: any): channels.SerializedArgument {
     handles.push(channel);
     return handles.length - 1;
   };
-  const value = serializeValue(arg, (value) => {
-    if (value instanceof JSHandle) return { h: pushHandle(value._channel) };
+  const value = serializeValue(arg, value => {
+    if (value instanceof JSHandle)
+      return { h: pushHandle(value._channel) };
     return { fallThrough: value };
   });
   return { value, handles };
@@ -124,7 +108,5 @@ export function parseResult(value: channels.SerializedValue): any {
 
 export function assertMaxArguments(count: number, max: number): asserts count {
   if (count > max)
-    throw new Error(
-      "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object."
-    );
+    throw new Error('Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.');
 }

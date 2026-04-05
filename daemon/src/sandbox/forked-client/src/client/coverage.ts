@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-import type * as api from "../../types/types";
-import type * as channels from "../protocol/channels";
+import type * as api from '../../types/types';
+import type * as channels from '../protocol/channels';
 
 export class Coverage implements api.Coverage {
   private _channel: channels.PageChannel;
@@ -29,7 +29,7 @@ export class Coverage implements api.Coverage {
     await this._channel.startJSCoverage(options);
   }
 
-  async stopJSCoverage(): Promise<channels.PageStopJSCoverageResult["entries"]> {
+  async stopJSCoverage(): Promise<channels.PageStopJSCoverageResult['entries']> {
     return (await this._channel.stopJSCoverage()).entries;
   }
 
@@ -37,7 +37,7 @@ export class Coverage implements api.Coverage {
     await this._channel.startCSSCoverage(options);
   }
 
-  async stopCSSCoverage(): Promise<channels.PageStopCSSCoverageResult["entries"]> {
+  async stopCSSCoverage(): Promise<channels.PageStopCSSCoverageResult['entries']> {
     return (await this._channel.stopCSSCoverage()).entries;
   }
 }

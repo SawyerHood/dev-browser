@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-export type Size = { width: number; height: number };
-export type Point = { x: number; y: number };
+export type Size = { width: number, height: number };
+export type Point = { x: number, y: number };
 export type Rect = Size & Point;
-export type Quad = [Point, Point, Point, Point];
-export type NameValue = { name: string; value: string };
+export type Quad = [ Point, Point, Point, Point ];
+export type NameValue = { name: string, value: string };
 export type HeadersArray = NameValue[];

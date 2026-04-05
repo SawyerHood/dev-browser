@@ -15,23 +15,20 @@
  * limitations under the License.
  */
 
-import { monotonicTime } from "../utils/isomorphic/time";
-import { raceAgainstDeadline } from "../utils/isomorphic/timeoutRunner";
-import { Browser } from "./browser";
-import { ChannelOwner } from "./channelOwner";
-import { Connection } from "./connection";
-import { Events } from "./events";
+import { monotonicTime } from '../utils/isomorphic/time';
+import { raceAgainstDeadline } from '../utils/isomorphic/timeoutRunner';
+import { Browser } from './browser';
+import { ChannelOwner } from './channelOwner';
+import { Connection } from './connection';
+import { Events } from './events';
 
-import type { Playwright } from "./playwright";
-import type { ConnectOptions, HeadersArray } from "./types";
-import type * as channels from "../protocol/channels";
+import type { Playwright } from './playwright';
+import type { ConnectOptions, HeadersArray } from './types';
+import type * as channels from '../protocol/channels';
 
-export async function connectToBrowser(
-  playwright: Playwright,
-  params: ConnectOptions
-): Promise<Browser> {
+export async function connectToBrowser(playwright: Playwright, params: ConnectOptions): Promise<Browser> {
   const deadline = params.timeout ? monotonicTime() + params.timeout : 0;
-  const nameParam = params.browserName ? { "x-playwright-browser": params.browserName } : {};
+  const nameParam = params.browserName ? { 'x-playwright-browser': params.browserName } : {};
   const headers = { ...nameParam, ...params.headers };
   const connectParams: channels.LocalUtilsConnectParams = {
     endpoint: params.endpoint!,
@@ -44,10 +41,11 @@ export async function connectToBrowser(
     connectParams.socksProxyRedirectPortForTest = (params as any).__testHookRedirectPortForwarding;
   const connection = await connectToEndpoint(playwright._connection, connectParams);
   let browser: Browser;
-  connection.on("close", () => {
+  connection.on('close', () => {
     // Emulate all pages, contexts and the browser closing upon disconnect.
     for (const context of browser?.contexts() || []) {
-      for (const page of context.pages()) page._onClose();
+      for (const page of context.pages())
+        page._onClose();
       context._onClose();
     }
     setTimeout(() => browser?._didClose(), 0);
@@ -61,7 +59,7 @@ export async function connectToBrowser(
     const playwright = await connection!.initializePlaywright();
     if (!playwright._initializer.preLaunchedBrowser) {
       connection.close();
-      throw new Error("Malformed endpoint. Did you use BrowserType.launchServer method?");
+      throw new Error('Malformed endpoint. Did you use BrowserType.launchServer method?');
     }
     playwright.selectors = playwright.selectors;
     browser = Browser.from(playwright._initializer.preLaunchedBrowser!);
@@ -77,29 +75,21 @@ export async function connectToBrowser(
   }
 }
 
-export async function connectToEndpoint(
-  parentConnection: Connection,
-  params: channels.LocalUtilsConnectParams
-): Promise<Connection> {
+export async function connectToEndpoint(parentConnection: Connection, params: channels.LocalUtilsConnectParams): Promise<Connection> {
   const localUtils = parentConnection.localUtils();
   const transport = localUtils ? new JsonPipeTransport(localUtils) : new WebSocketTransport();
   const connectHeaders = await transport.connect(params);
-  const connection = new Connection(
-    parentConnection._platform,
-    localUtils,
-    parentConnection._instrumentation,
-    connectHeaders
-  );
+  const connection = new Connection(parentConnection._platform, localUtils, parentConnection._instrumentation, connectHeaders);
   connection.markAsRemote();
-  connection.on("close", () => transport.close());
+  connection.on('close', () => transport.close());
 
   let closeError: string | undefined;
   const onTransportClosed = (reason?: string) => {
     connection.close(reason || closeError);
   };
-  transport.onClose((reason) => onTransportClosed(reason));
-  connection.onmessage = (message) => transport.send(message).catch(() => onTransportClosed());
-  transport.onMessage((message) => {
+  transport.onClose(reason => onTransportClosed(reason));
+  connection.onmessage = message => transport.send(message).catch(() => onTransportClosed());
+  transport.onMessage(message => {
     try {
       connection!.dispatch(message);
     } catch (e) {
@@ -137,11 +127,11 @@ class JsonPipeTransport implements Transport {
   }
 
   onMessage(callback: (message: object) => void) {
-    this._pipe!.on("message", ({ message }) => callback(message));
+    this._pipe!.on('message', ({ message }) => callback(message));
   }
 
   onClose(callback: (reason?: string) => void) {
-    this._pipe!.on("closed", ({ reason }) => callback(reason));
+    this._pipe!.on('closed', ({ reason }) => callback(reason));
   }
 
   async close() {
@@ -162,11 +152,11 @@ class WebSocketTransport implements Transport {
   }
 
   onMessage(callback: (message: object) => void) {
-    this._ws!.addEventListener("message", (event) => callback(JSON.parse(event.data)));
+    this._ws!.addEventListener('message', event => callback(JSON.parse(event.data)));
   }
 
   onClose(callback: (reason?: string) => void) {
-    this._ws!.addEventListener("close", () => callback());
+    this._ws!.addEventListener('close', () => callback());
   }
 
   async close() {

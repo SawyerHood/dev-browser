@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-import { ManualPromise } from "./manualPromise";
+import { ManualPromise } from './manualPromise';
 
 export class Semaphore {
   private _max: number;

@@ -15,19 +15,16 @@
  * limitations under the License.
  */
 
-import { ChannelOwner } from "./channelOwner";
-import { isTargetClosedError } from "./errors";
+import { ChannelOwner } from './channelOwner';
+import { isTargetClosedError } from './errors';
 
-import type * as channels from "../protocol/channels";
+import type * as channels from '../protocol/channels';
 
 export interface Disposable {
   dispose: () => Promise<void>;
 }
 
-export class DisposableObject<T extends channels.DisposableChannel = channels.DisposableChannel>
-  extends ChannelOwner<T>
-  implements Disposable
-{
+export class DisposableObject<T extends channels.DisposableChannel = channels.DisposableChannel> extends ChannelOwner<T> implements Disposable {
   static from(channel: channels.DisposableChannel): DisposableObject {
     return (channel as any)._object;
   }
@@ -40,7 +37,8 @@ export class DisposableObject<T extends channels.DisposableChannel = channels.Di
     try {
       await this._channel.dispose();
     } catch (e) {
-      if (isTargetClosedError(e)) return;
+      if (isTargetClosedError(e))
+        return;
       throw e;
     }
   }
@@ -58,13 +56,15 @@ export class DisposableStub implements Disposable {
   }
 
   async dispose() {
-    if (!this._dispose) return;
+    if (!this._dispose)
+      return;
     try {
       const dispose = this._dispose;
       this._dispose = undefined;
       await dispose();
     } catch (e) {
-      if (isTargetClosedError(e)) return;
+      if (isTargetClosedError(e))
+        return;
       throw e;
     }
   }
@@ -73,5 +73,5 @@ export class DisposableStub implements Disposable {
 export async function disposeAll(disposables: Disposable[]) {
   const copy = [...disposables];
   disposables.length = 0;
-  await Promise.all(copy.map((d) => d.dispose()));
+  await Promise.all(copy.map(d => d.dispose()));
 }

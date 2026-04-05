@@ -16,5 +16,6 @@
  */
 
 export function assert(value: any, message?: string): asserts value {
-  if (!value) throw new Error(message || "Assertion error");
+  if (!value)
+    throw new Error(message || 'Assertion error');
 }

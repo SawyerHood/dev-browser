@@ -43,25 +43,25 @@ export type Colors = typeof webColors;
 
 export const noColors: Colors = {
   enabled: false,
-  reset: (t) => t,
-  bold: (t) => t,
-  dim: (t) => t,
-  italic: (t) => t,
-  underline: (t) => t,
-  inverse: (t) => t,
-  hidden: (t) => t,
-  strikethrough: (t) => t,
-  black: (t) => t,
-  red: (t) => t,
-  green: (t) => t,
-  yellow: (t) => t,
-  blue: (t) => t,
-  magenta: (t) => t,
-  cyan: (t) => t,
-  white: (t) => t,
-  gray: (t) => t,
-  grey: (t) => t,
+  reset: t => t,
+  bold: t => t,
+  dim: t => t,
+  italic: t => t,
+  underline: t => t,
+  inverse: t => t,
+  hidden: t => t,
+  strikethrough: t => t,
+  black: t => t,
+  red: t => t,
+  green: t => t,
+  yellow: t => t,
+  blue: t => t,
+  magenta: t => t,
+  cyan: t => t,
+  white: t => t,
+  gray: t => t,
+  grey: t => t,
 };
 
-const applyStyle = (open: number, close: number, text: string) =>
-  `\u001b[${open}m${text}\u001b[${close}m`;
+
+const applyStyle = (open: number, close: number, text: string) => `\u001b[${open}m${text}\u001b[${close}m`;
