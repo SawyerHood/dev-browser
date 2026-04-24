@@ -2,13 +2,26 @@ import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import {
+  createLiveCdpBrowser,
+  getLiveCdpPageTargetId,
+  isLiveCdpBrowser,
+  type LiveCdpBrowser,
+  type LiveCdpBrowserContext,
+  type LiveCdpPage,
+} from "./live-cdp-browser.js";
+
+type BrowserHandle = Browser | LiveCdpBrowser;
+type BrowserContextHandle = BrowserContext | LiveCdpBrowserContext;
+type BrowserPageHandle = Page | LiveCdpPage;
+export type BrowserPage = BrowserPageHandle;
 
 export interface BrowserEntry {
   name: string;
   type: "launched" | "connected";
-  browser: Browser;
-  context: BrowserContext;
-  pages: Map<string, Page>;
+  browser: BrowserHandle;
+  context: BrowserContextHandle;
+  pages: Map<string, BrowserPageHandle>;
   profileDir?: string;
   endpoint?: string;
   headless: boolean;
@@ -31,6 +44,7 @@ interface BrowserPageSummary {
 
 type BrowserManagerDependencies = {
   connectOverCDP: typeof chromium.connectOverCDP;
+  createLiveCdpBrowser: typeof createLiveCdpBrowser;
   fetch: typeof globalThis.fetch;
   homedir: () => string;
   launchPersistentContext: typeof chromium.launchPersistentContext;
@@ -48,6 +62,11 @@ type DebuggerWebSocketLookupResult =
       status: "not-found" | "unavailable";
     };
 
+type ConnectedEndpoint = {
+  endpoint: string;
+  backend: "playwright" | "live-cdp";
+};
+
 const DISCOVERY_PORTS = [9222, 9223, 9224, 9225, 9226, 9227, 9228, 9229];
 const PROBE_TIMEOUT_MS = 750;
 const MANUAL_CONNECT_TIMEOUT_MS = 5_000;
@@ -63,6 +82,18 @@ function isHttpEndpoint(endpoint: string): boolean {
   return endpoint.startsWith("http://") || endpoint.startsWith("https://");
 }
 
+function isWebSocketEndpoint(endpoint: string): boolean {
+  let url: URL;
+
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+
+  return url.protocol === "ws:" || url.protocol === "wss:";
+}
+
 export class BrowserManager {
   private readonly browsers = new Map<string, BrowserEntry>();
   private readonly baseDir: string;
@@ -75,6 +106,7 @@ export class BrowserManager {
     this.baseDir = baseDir;
     this.dependencies = {
       connectOverCDP: chromium.connectOverCDP.bind(chromium) as typeof chromium.connectOverCDP,
+      createLiveCdpBrowser,
       fetch: globalThis.fetch,
       homedir: os.homedir,
       launchPersistentContext: chromium.launchPersistentContext.bind(
@@ -133,12 +165,12 @@ export class BrowserManager {
     const attemptedEndpoints = new Set<string>();
     let lastError: unknown;
 
-    const tryEndpoint = async (endpoint: string | null): Promise<BrowserEntry | null> => {
-      if (!endpoint || attemptedEndpoints.has(endpoint)) {
+    const tryEndpoint = async (endpoint: ConnectedEndpoint | null): Promise<BrowserEntry | null> => {
+      if (!endpoint || attemptedEndpoints.has(endpoint.endpoint)) {
         return null;
       }
 
-      attemptedEndpoints.add(endpoint);
+      attemptedEndpoints.add(endpoint.endpoint);
 
       try {
         return await this.openConnectedBrowser(name, endpoint);
@@ -148,7 +180,13 @@ export class BrowserManager {
       }
     };
 
-    const devToolsEndpoint = await this.readDevToolsActivePort();
+    const devToolsActivePortEndpoint = await this.readDevToolsActivePort();
+    const devToolsEndpoint = devToolsActivePortEndpoint
+      ? {
+          endpoint: devToolsActivePortEndpoint,
+          backend: "live-cdp" as const,
+        }
+      : null;
     const devToolsBrowser = await tryEndpoint(devToolsEndpoint);
     if (devToolsBrowser) {
       return devToolsBrowser;
@@ -177,7 +215,7 @@ export class BrowserManager {
     if (existing) {
       const isSameConnection =
         existing.type === "connected" &&
-        existing.endpoint === resolvedEndpoint &&
+        existing.endpoint === resolvedEndpoint.endpoint &&
         existing.browser.isConnected();
 
       if (isSameConnection) {
@@ -204,7 +242,7 @@ export class BrowserManager {
     const existingPage = entry.pages.get(pageNameOrId);
 
     if (existingPage && !existingPage.isClosed()) {
-      return existingPage;
+      return existingPage as Page;
     }
 
     entry.pages.delete(pageNameOrId);
@@ -212,24 +250,28 @@ export class BrowserManager {
     if (TARGET_ID_PATTERN.test(pageNameOrId)) {
       const page = await this.findPageByTargetId(entry, pageNameOrId);
       if (page) {
-        return page;
+        return page as Page;
       }
     }
 
     const page = await entry.context.newPage();
     this.registerNamedPage(entry, pageNameOrId, page);
-    return page;
+    return page as Page;
   }
 
   async newPage(browserName: string): Promise<Page> {
     const entry = this.getBrowserEntry(browserName);
-    return entry.context.newPage();
+    return (await entry.context.newPage()) as Page;
   }
 
   async listPages(browserName: string): Promise<BrowserPageSummary[]> {
     const entry = this.browsers.get(browserName);
     if (!entry || !entry.browser.isConnected()) {
       return [];
+    }
+
+    if (isLiveCdpBrowser(entry.browser)) {
+      await entry.browser.refreshPages();
     }
 
     this.pruneClosedPages(entry);
@@ -385,8 +427,14 @@ export class BrowserManager {
     return entry;
   }
 
-  private async openConnectedBrowser(name: string, endpoint: string): Promise<BrowserEntry> {
-    const browser = await this.dependencies.connectOverCDP(endpoint);
+  private async openConnectedBrowser(
+    name: string,
+    resolved: ConnectedEndpoint
+  ): Promise<BrowserEntry> {
+    const browser =
+      resolved.backend === "live-cdp"
+        ? await this.dependencies.createLiveCdpBrowser(resolved.endpoint)
+        : await this.dependencies.connectOverCDP(resolved.endpoint);
     const contexts = browser.contexts();
 
     // Enumerate existing tabs for connected browsers, but leave them unnamed so getPage(name)
@@ -403,7 +451,7 @@ export class BrowserManager {
       browser,
       context,
       pages: new Map(),
-      endpoint,
+      endpoint: resolved.endpoint,
       headless: false,
       ignoreHTTPSErrors: false,
     };
@@ -437,10 +485,13 @@ export class BrowserManager {
     }
   }
 
-  private async discoverChrome(): Promise<string | null> {
+  private async discoverChrome(): Promise<ConnectedEndpoint | null> {
     const devToolsEndpoint = await this.readDevToolsActivePort();
     if (devToolsEndpoint) {
-      return devToolsEndpoint;
+      return {
+        endpoint: devToolsEndpoint,
+        backend: "live-cdp",
+      };
     }
 
     for (const port of DISCOVERY_PORTS) {
@@ -476,16 +527,25 @@ export class BrowserManager {
     return null;
   }
 
-  private async probePort(port: number): Promise<string | null> {
+  private async probePort(port: number): Promise<ConnectedEndpoint | null> {
     const endpoint = `http://127.0.0.1:${port}`;
     const result = await this.fetchDebuggerWebSocketUrl(endpoint, PROBE_TIMEOUT_MS);
 
     if (result.status === "ok") {
-      return result.webSocketDebuggerUrl;
+      return {
+        endpoint: result.webSocketDebuggerUrl,
+        backend: "playwright",
+      };
     }
 
     if (result.status === "not-found") {
-      return this.readDevToolsActivePort(port);
+      const activePortEndpoint = await this.readDevToolsActivePort(port);
+      return activePortEndpoint
+        ? {
+            endpoint: activePortEndpoint,
+            backend: "live-cdp",
+          }
+        : null;
     }
 
     return null;
@@ -576,7 +636,7 @@ export class BrowserManager {
     }
   }
 
-  private async resolveEndpoint(endpoint: string): Promise<string> {
+  private async resolveEndpoint(endpoint: string): Promise<ConnectedEndpoint> {
     if (endpoint === "auto") {
       const discoveredEndpoint = await this.discoverChrome();
       if (discoveredEndpoint) {
@@ -599,7 +659,10 @@ export class BrowserManager {
       return discoveredEndpoint;
     }
 
-    return endpoint;
+    return {
+      endpoint,
+      backend: isWebSocketEndpoint(endpoint) ? "live-cdp" : "playwright",
+    };
   }
 
   private async fetchDebuggerWebSocketUrl(
@@ -686,16 +749,28 @@ export class BrowserManager {
     return details.join("\n");
   }
 
-  private async resolveHttpEndpoint(endpoint: string, timeoutMs: number): Promise<string | null> {
+  private async resolveHttpEndpoint(
+    endpoint: string,
+    timeoutMs: number
+  ): Promise<ConnectedEndpoint | null> {
     const result = await this.fetchDebuggerWebSocketUrl(endpoint, timeoutMs);
     if (result.status === "ok") {
-      return result.webSocketDebuggerUrl;
+      return {
+        endpoint: result.webSocketDebuggerUrl,
+        backend: "playwright",
+      };
     }
 
     if (result.status === "not-found") {
       const port = this.getEndpointPort(endpoint);
       if (port !== null) {
-        return this.readDevToolsActivePort(port);
+        const activePortEndpoint = await this.readDevToolsActivePort(port);
+        return activePortEndpoint
+          ? {
+              endpoint: activePortEndpoint,
+              backend: "live-cdp",
+            }
+          : null;
       }
     }
 
@@ -749,7 +824,7 @@ export class BrowserManager {
     ].join("\n");
   }
 
-  private registerNamedPage(entry: BrowserEntry, pageName: string, page: Page): void {
+  private registerNamedPage(entry: BrowserEntry, pageName: string, page: BrowserPageHandle): void {
     entry.pages.set(pageName, page);
 
     page.on("close", () => {
@@ -777,8 +852,8 @@ export class BrowserManager {
       .sort((left, right) => left.localeCompare(right));
   }
 
-  private getNamedPagesByPage(entry: BrowserEntry): Map<Page, string> {
-    const namesByPage = new Map<Page, string>();
+  private getNamedPagesByPage(entry: BrowserEntry): Map<BrowserPageHandle, string> {
+    const namesByPage = new Map<BrowserPageHandle, string>();
 
     for (const [name, page] of entry.pages.entries()) {
       if (!page.isClosed() && !namesByPage.has(page)) {
@@ -789,12 +864,14 @@ export class BrowserManager {
     return namesByPage;
   }
 
-  private getBrowserContexts(entry: BrowserEntry): BrowserContext[] {
+  private getBrowserContexts(entry: BrowserEntry): BrowserContextHandle[] {
     return [...new Set([entry.context, ...entry.browser.contexts()])];
   }
 
-  private getContextPages(entry: BrowserEntry): Array<{ context: BrowserContext; page: Page }> {
-    const pages: Array<{ context: BrowserContext; page: Page }> = [];
+  private getContextPages(
+    entry: BrowserEntry
+  ): Array<{ context: BrowserContextHandle; page: BrowserPageHandle }> {
+    const pages: Array<{ context: BrowserContextHandle; page: BrowserPageHandle }> = [];
 
     for (const context of this.getBrowserContexts(entry)) {
       for (const page of context.pages()) {
@@ -807,7 +884,7 @@ export class BrowserManager {
     return pages;
   }
 
-  private async getPageTitle(page: Page): Promise<string> {
+  private async getPageTitle(page: BrowserPageHandle): Promise<string> {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     try {
@@ -824,7 +901,14 @@ export class BrowserManager {
     }
   }
 
-  private async findPageByTargetId(entry: BrowserEntry, targetId: string): Promise<Page | null> {
+  private async findPageByTargetId(
+    entry: BrowserEntry,
+    targetId: string
+  ): Promise<BrowserPageHandle | null> {
+    if (isLiveCdpBrowser(entry.browser)) {
+      await entry.browser.refreshPages();
+    }
+
     for (const { context, page } of this.getContextPages(entry)) {
       const pageTargetId = await this.getPageTargetId(context, page);
       if (pageTargetId === targetId) {
@@ -835,11 +919,19 @@ export class BrowserManager {
     return null;
   }
 
-  private async getPageTargetId(context: BrowserContext, page: Page): Promise<string | null> {
+  private async getPageTargetId(
+    context: BrowserContextHandle,
+    page: BrowserPageHandle
+  ): Promise<string | null> {
+    const liveCdpTargetId = getLiveCdpPageTargetId(page);
+    if (liveCdpTargetId) {
+      return liveCdpTargetId;
+    }
+
     let session: Awaited<ReturnType<BrowserContext["newCDPSession"]>> | undefined;
 
     try {
-      session = await context.newCDPSession(page);
+      session = await (context as BrowserContext).newCDPSession(page as Page);
       const result = await session.send("Target.getTargetInfo");
       const targetId =
         typeof result === "object" &&
