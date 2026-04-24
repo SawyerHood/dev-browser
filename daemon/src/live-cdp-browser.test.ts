@@ -12,6 +12,14 @@ type CdpMessage = {
 class MockLiveCdpTransport implements LiveCdpTransport {
   readonly sent: CdpMessage[] = [];
   readonly hangingMethods = new Set<string>();
+  targetInfos = [
+    {
+      targetId: "target-1",
+      type: "page",
+      url: "https://example.com/",
+      title: "Existing",
+    },
+  ];
 
   #closed = false;
   #messageListeners = new Set<(message: string) => void>();
@@ -65,14 +73,7 @@ class MockLiveCdpTransport implements LiveCdpTransport {
         this.emit({
           id: request.id,
           result: {
-            targetInfos: [
-              {
-                targetId: "target-1",
-                type: "page",
-                url: "https://example.com/",
-                title: "Existing",
-              },
-            ],
+            targetInfos: this.targetInfos,
           },
         });
         return;
@@ -90,14 +91,35 @@ class MockLiveCdpTransport implements LiveCdpTransport {
       case "Network.enable":
         this.emit({ id: request.id, result: {} });
         return;
+      case "Page.getFrameTree":
+        this.emit({
+          id: request.id,
+          result: {
+            frameTree: {
+              frame: {
+                id: "frame-1",
+              },
+            },
+          },
+        });
+        return;
       case "Target.createTarget":
         this.emit({ id: request.id, result: { targetId: "target-2" } });
         return;
       case "Runtime.evaluate":
-        this.emit({ id: request.id, result: { result: { type: "string", value: "Live Title" } } });
+        this.emit({
+          id: request.id,
+          result: {
+            result:
+              request.params?.expression === "document.title"
+                ? { type: "string", value: "Live Title" }
+                : { type: "number", value: 42 },
+          },
+        });
         return;
-      case "Runtime.callFunctionOn":
-        this.emit({ id: request.id, result: { result: { type: "number", value: 42 } } });
+      case "Input.dispatchKeyEvent":
+      case "Target.detachFromTarget":
+        this.emit({ id: request.id, result: {} });
         return;
       case "Page.navigate":
         this.emit({ id: request.id, result: { frameId: "frame-1" } });
@@ -179,6 +201,7 @@ describe("live-CDP browser adapter", () => {
       ])
     );
     expect(transport.sent.map((message) => message.method)).not.toContain("Target.setAutoAttach");
+    expect(transport.sent.map((message) => message.method)).not.toContain("Runtime.callFunctionOn");
     expect(
       transport.sent.find((message) => message.method === "Target.attachToTarget")?.params
     ).toEqual({
@@ -225,5 +248,94 @@ describe("live-CDP browser adapter", () => {
     });
 
     expect(context?.pages()).toHaveLength(0);
+  });
+
+  it("tracks same-document navigation for synchronous url reads", async () => {
+    const transport = new MockLiveCdpTransport();
+    const browser = await createLiveCdpBrowser("ws://127.0.0.1/devtools/browser/test", {
+      transportFactory: async () => transport,
+    });
+    const page = browser.contexts()[0]?.pages()[0];
+    expect(page?.url()).toBe("https://example.com/");
+
+    transport.emit({
+      method: "Page.navigatedWithinDocument",
+      sessionId: "session-1",
+      params: {
+        frameId: "frame-1",
+        url: "https://example.com/chat/c/123",
+      },
+    });
+
+    expect(page?.url()).toBe("https://example.com/chat/c/123");
+  });
+
+  it("types text as per-character key events", async () => {
+    const transport = new MockLiveCdpTransport();
+    const browser = await createLiveCdpBrowser("ws://127.0.0.1/devtools/browser/test", {
+      transportFactory: async () => transport,
+    });
+    const page = browser.contexts()[0]?.pages()[0];
+
+    await page?.keyboard.type("ab");
+
+    const keyEvents = transport.sent.filter((message) => message.method === "Input.dispatchKeyEvent");
+    expect(keyEvents).toHaveLength(6);
+    expect(keyEvents.map((message) => message.params?.type)).toEqual([
+      "keyDown",
+      "char",
+      "keyUp",
+      "keyDown",
+      "char",
+      "keyUp",
+    ]);
+    expect(transport.sent.map((message) => message.method)).not.toContain("Input.insertText");
+  });
+
+  it("ignores same-document navigation from subframes", async () => {
+    const transport = new MockLiveCdpTransport();
+    const browser = await createLiveCdpBrowser("ws://127.0.0.1/devtools/browser/test", {
+      transportFactory: async () => transport,
+    });
+    const page = browser.contexts()[0]?.pages()[0];
+    expect(page?.url()).toBe("https://example.com/");
+
+    transport.emit({
+      method: "Page.navigatedWithinDocument",
+      sessionId: "session-1",
+      params: {
+        frameId: "subframe-1",
+        url: "https://embedded.example/path",
+      },
+    });
+
+    expect(page?.url()).toBe("https://example.com/");
+  });
+
+  it("prioritizes yoetz-owned targets before pre-existing tabs", async () => {
+    const transport = new MockLiveCdpTransport();
+    transport.targetInfos = [
+      {
+        targetId: "target-existing",
+        type: "page",
+        url: "https://example.com/",
+        title: "Existing",
+      },
+      {
+        targetId: "target-yoetz",
+        type: "page",
+        url: "https://chatgpt.com/?_yoetz=run-1",
+        title: "Yoetz",
+      },
+    ];
+
+    await createLiveCdpBrowser("ws://127.0.0.1/devtools/browser/test", {
+      transportFactory: async () => transport,
+    });
+
+    const attachedTargets = transport.sent
+      .filter((message) => message.method === "Target.attachToTarget")
+      .map((message) => message.params?.targetId);
+    expect(attachedTargets).toEqual(["target-yoetz"]);
   });
 });

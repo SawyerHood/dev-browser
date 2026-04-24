@@ -534,7 +534,7 @@ export class BrowserManager {
     if (result.status === "ok") {
       return {
         endpoint: result.webSocketDebuggerUrl,
-        backend: "playwright",
+        backend: "live-cdp",
       };
     }
 
@@ -757,7 +757,7 @@ export class BrowserManager {
     if (result.status === "ok") {
       return {
         endpoint: result.webSocketDebuggerUrl,
-        backend: "playwright",
+        backend: "live-cdp",
       };
     }
 

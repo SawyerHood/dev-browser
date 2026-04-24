@@ -431,7 +431,7 @@ describe("BrowserManager auto-connect", () => {
 
       await expect(getInternals(manager).probePort(address.port)).resolves.toEqual({
         endpoint: websocketUrl,
-        backend: "playwright",
+        backend: "live-cdp",
       });
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -455,7 +455,8 @@ describe("BrowserManager auto-connect", () => {
     });
     const context = new MockContext([existingPage]);
     const browser = new MockBrowser([context]);
-    const connectOverCDP = vi.fn(async () => browser);
+    const connectOverCDP = vi.fn();
+    const createLiveCdpBrowser = vi.fn(async () => browser);
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       expect(String(input)).toBe("http://127.0.0.1:9222/json/version");
       return new Response(
@@ -472,15 +473,17 @@ describe("BrowserManager auto-connect", () => {
     }) as typeof globalThis.fetch;
     const { manager } = createManager({
       connectOverCDP,
+      createLiveCdpBrowser,
       fetch,
     });
 
     await manager.connectBrowser("attached", "http://127.0.0.1:9222");
     const namedPage = await manager.getPage("attached", "dashboard");
 
-    expect(connectOverCDP).toHaveBeenCalledWith(
+    expect(createLiveCdpBrowser).toHaveBeenCalledWith(
       "ws://127.0.0.1:9222/devtools/browser/connected-browser"
     );
+    expect(connectOverCDP).not.toHaveBeenCalled();
     expect(namedPage).not.toBe(existingPage);
     expect(context.newPageCalls).toBe(1);
     await expect(manager.listPages("attached")).resolves.toEqual([
@@ -645,7 +648,7 @@ describe("BrowserManager auto-connect", () => {
     const browser = new MockBrowser([new MockContext()]);
     const requests: string[] = [];
     const connectOverCDP = vi.fn(async () => browser);
-    const createLiveCdpBrowser = vi.fn();
+    const createLiveCdpBrowser = vi.fn(async () => browser);
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       requests.push(url);
@@ -682,10 +685,10 @@ describe("BrowserManager auto-connect", () => {
       "http://127.0.0.1:9222/json/version",
       "http://127.0.0.1:9223/json/version",
     ]);
-    expect(connectOverCDP).toHaveBeenCalledWith(
+    expect(createLiveCdpBrowser).toHaveBeenCalledWith(
       "ws://127.0.0.1:9223/devtools/browser/discovered"
     );
-    expect(createLiveCdpBrowser).not.toHaveBeenCalled();
+    expect(connectOverCDP).not.toHaveBeenCalled();
     expect(manager.listBrowsers()).toEqual([
       {
         name: "auto-browser",
@@ -759,10 +762,10 @@ describe("BrowserManager auto-connect", () => {
 
     await manager.autoConnect("auto-browser");
 
-    expect(createLiveCdpBrowser).toHaveBeenCalledTimes(1);
-    expect(createLiveCdpBrowser).toHaveBeenCalledWith(staleEndpoint);
-    expect(connectOverCDP).toHaveBeenCalledTimes(1);
-    expect(connectOverCDP).toHaveBeenCalledWith(discoveredEndpoint);
+    expect(createLiveCdpBrowser).toHaveBeenCalledTimes(2);
+    expect(createLiveCdpBrowser).toHaveBeenNthCalledWith(1, staleEndpoint);
+    expect(createLiveCdpBrowser).toHaveBeenNthCalledWith(2, discoveredEndpoint);
+    expect(connectOverCDP).not.toHaveBeenCalled();
     expect(requests).toEqual([
       "http://127.0.0.1:9222/json/version",
       "http://127.0.0.1:9223/json/version",

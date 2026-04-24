@@ -395,17 +395,22 @@ export class LiveCdpBrowser extends EventEmitter {
   ): Promise<LiveCdpBrowser> {
     const connection = await CdpConnection.connect(endpoint, options.transportFactory);
 
-    await sendLiveCdpInitCommand(
-      connection,
-      "Browser.getVersion",
-      {},
-      undefined,
-      "Browser.getVersion"
-    );
+    try {
+      await sendLiveCdpInitCommand(
+        connection,
+        "Browser.getVersion",
+        {},
+        undefined,
+        "Browser.getVersion"
+      );
 
-    const browser = new LiveCdpBrowser(connection);
-    await browser.refreshPages();
-    return browser;
+      const browser = new LiveCdpBrowser(connection);
+      await browser.refreshPages();
+      return browser;
+    } catch (error) {
+      connection.close("live-CDP initialization failed");
+      throw error;
+    }
   }
 
   private constructor(connection: CdpConnection) {
@@ -484,29 +489,55 @@ export class LiveCdpBrowserContext {
       undefined,
       "Target.getTargets"
     );
-    const targetInfos = Array.isArray(result.targetInfos) ? result.targetInfos : [];
+    const targetInfos = Array.isArray(result.targetInfos)
+      ? result.targetInfos
+          .map((rawInfo) => normalizeTargetInfo(rawInfo))
+          .filter((targetInfo): targetInfo is TargetInfo =>
+            Boolean(targetInfo && isPageLikeTarget(targetInfo))
+          )
+      : [];
+    const hasYoetzTarget = targetInfos.some(isYoetzTarget);
+    const targetInfosToAttach = targetInfos
+      .filter(
+        (targetInfo) =>
+          !hasYoetzTarget ||
+          isYoetzTarget(targetInfo) ||
+          this.#pagesByTargetId.has(targetInfo.targetId)
+      )
+      .sort(compareTargetAttachPriority);
     const liveTargetIds = new Set<string>();
+    const attachErrors: Error[] = [];
 
-    for (const rawInfo of targetInfos) {
-      const targetInfo = normalizeTargetInfo(rawInfo);
-      if (!targetInfo || !isPageLikeTarget(targetInfo)) {
-        continue;
-      }
-
-      liveTargetIds.add(targetInfo.targetId);
+    for (const targetInfo of targetInfosToAttach) {
       const existingPage = this.#pagesByTargetId.get(targetInfo.targetId);
       if (existingPage) {
+        liveTargetIds.add(targetInfo.targetId);
         existingPage.updateTargetInfo(targetInfo);
         continue;
       }
 
-      await this.attachToTarget(targetInfo).catch(() => undefined);
+      try {
+        await this.attachToTarget(targetInfo);
+        liveTargetIds.add(targetInfo.targetId);
+      } catch (error) {
+        attachErrors.push(
+          new Error(
+            `Failed to attach live-CDP target ${targetInfo.targetId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          )
+        );
+      }
     }
 
     for (const [targetId, page] of this.#pagesByTargetId.entries()) {
       if (!liveTargetIds.has(targetId)) {
         this.markPageClosed(page);
       }
+    }
+
+    if (this.#pagesByTargetId.size === 0 && attachErrors.length > 0) {
+      throw attachErrors[0]!;
     }
   }
 
@@ -535,45 +566,76 @@ export class LiveCdpBrowserContext {
       );
     }
 
-    await sendLiveCdpInitCommand(
-      this.connection,
-      "Page.enable",
-      {},
-      sessionId,
-      `Page.enable(${targetInfo.targetId})`,
-      LIVE_CDP_TARGET_INIT_TIMEOUT_MS
-    );
-    await sendLiveCdpInitCommand(
-      this.connection,
-      "Runtime.enable",
-      {},
-      sessionId,
-      `Runtime.enable(${targetInfo.targetId})`,
-      LIVE_CDP_TARGET_INIT_TIMEOUT_MS
-    );
-    await sendLiveCdpInitCommand(
-      this.connection,
-      "Runtime.runIfWaitingForDebugger",
-      {},
-      sessionId,
-      `Runtime.runIfWaitingForDebugger(${targetInfo.targetId})`,
-      LIVE_CDP_TARGET_INIT_TIMEOUT_MS
-    ).catch(() => {});
-    await sendLiveCdpInitCommand(
-      this.connection,
-      "Network.enable",
-      {},
-      sessionId,
-      `Network.enable(${targetInfo.targetId})`,
-      LIVE_CDP_TARGET_INIT_TIMEOUT_MS
-    );
+    try {
+      await sendLiveCdpInitCommand(
+        this.connection,
+        "Page.enable",
+        {},
+        sessionId,
+        `Page.enable(${targetInfo.targetId})`,
+        LIVE_CDP_TARGET_INIT_TIMEOUT_MS
+      );
+      const mainFrameId = await this.readMainFrameId(sessionId, targetInfo.targetId);
+      await sendLiveCdpInitCommand(
+        this.connection,
+        "Runtime.enable",
+        {},
+        sessionId,
+        `Runtime.enable(${targetInfo.targetId})`,
+        LIVE_CDP_TARGET_INIT_TIMEOUT_MS
+      );
+      await sendLiveCdpInitCommand(
+        this.connection,
+        "Runtime.runIfWaitingForDebugger",
+        {},
+        sessionId,
+        `Runtime.runIfWaitingForDebugger(${targetInfo.targetId})`,
+        LIVE_CDP_TARGET_INIT_TIMEOUT_MS
+      ).catch(() => {});
+      await sendLiveCdpInitCommand(
+        this.connection,
+        "Network.enable",
+        {},
+        sessionId,
+        `Network.enable(${targetInfo.targetId})`,
+        LIVE_CDP_TARGET_INIT_TIMEOUT_MS
+      );
 
-    const page = new LiveCdpPage(this.connection, targetInfo, sessionId, () => {
-      this.markPageClosed(page);
-    });
-    this.#pagesByTargetId.set(targetInfo.targetId, page);
-    this.#pagesBySessionId.set(sessionId, page);
-    return page;
+      const page = new LiveCdpPage(this.connection, targetInfo, sessionId, mainFrameId, () => {
+        this.markPageClosed(page);
+      });
+      this.#pagesByTargetId.set(targetInfo.targetId, page);
+      this.#pagesBySessionId.set(sessionId, page);
+      return page;
+    } catch (error) {
+      await this.connection
+        .send("Target.detachFromTarget", { sessionId }, undefined, 1_000)
+        .catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async readMainFrameId(
+    sessionId: string,
+    targetId: string
+  ): Promise<string | undefined> {
+    const result = await sendLiveCdpInitCommand(
+      this.connection,
+      "Page.getFrameTree",
+      {},
+      sessionId,
+      `Page.getFrameTree(${targetId})`,
+      LIVE_CDP_TARGET_INIT_TIMEOUT_MS
+    ).catch(() => undefined);
+    const frameTree =
+      result && typeof result.frameTree === "object" && result.frameTree !== null
+        ? (result.frameTree as { frame?: unknown })
+        : undefined;
+    const frame =
+      typeof frameTree?.frame === "object" && frameTree.frame !== null
+        ? (frameTree.frame as { id?: unknown })
+        : undefined;
+    return typeof frame?.id === "string" ? frame.id : undefined;
   }
 
   private handleEvent(event: CdpEvent): void {
@@ -617,7 +679,9 @@ export class LiveCdpKeyboard {
   constructor(private readonly page: LiveCdpPage) {}
 
   async type(text: string): Promise<void> {
-    await this.page.sendSession("Input.insertText", { text });
+    for (const char of Array.from(text)) {
+      await this.press(char);
+    }
   }
 
   async down(key: string): Promise<void> {
@@ -643,11 +707,14 @@ export class LiveCdpKeyboard {
     const activeModifiers = this.#modifiers | modifiers;
 
     await this.dispatchKeyEvent("keyDown", definition, activeModifiers);
+    if (definition.text && activeModifiers === 0) {
+      await this.dispatchKeyEvent("char", definition, activeModifiers);
+    }
     await this.dispatchKeyEvent("keyUp", definition, activeModifiers);
   }
 
   private async dispatchKeyEvent(
-    type: "keyDown" | "keyUp",
+    type: "keyDown" | "char" | "keyUp",
     definition: KeyDefinition,
     modifiers: number
   ): Promise<void> {
@@ -657,7 +724,7 @@ export class LiveCdpKeyboard {
       code: definition.code,
       windowsVirtualKeyCode: definition.windowsVirtualKeyCode,
       nativeVirtualKeyCode: definition.windowsVirtualKeyCode,
-      text: type === "keyDown" && modifiers === 0 ? definition.text : undefined,
+      text: type === "char" ? definition.text : undefined,
       unmodifiedText: definition.text,
       modifiers,
     });
@@ -677,6 +744,7 @@ export class LiveCdpPage extends EventEmitter {
   readonly mouse = new LiveCdpMouse(this);
 
   #closed = false;
+  #mainFrameId: string | undefined;
   #url: string;
   #title: string;
 
@@ -684,10 +752,12 @@ export class LiveCdpPage extends EventEmitter {
     private readonly connection: CdpConnection,
     targetInfo: TargetInfo,
     readonly sessionId: string,
+    mainFrameId: string | undefined,
     private readonly onClose: () => void
   ) {
     super();
     this.targetId = targetInfo.targetId;
+    this.#mainFrameId = mainFrameId;
     this.#url = targetInfo.url ?? "about:blank";
     this.#title = targetInfo.title ?? "";
   }
@@ -811,14 +881,12 @@ export class LiveCdpPage extends EventEmitter {
     }
 
     const args = payload.args ?? (payload.hasArg ? [payload.arg] : []);
-    const result = (await this.sendSession("Runtime.callFunctionOn", {
-      functionDeclaration: `function(...args) {
+    const result = (await this.sendSession("Runtime.evaluate", {
+      expression: `(() => {
         const fn = (${payload.source});
+        const args = [${args.map((value) => serializeRuntimeArgument(value)).join(",")}];
         return fn(...args);
-      }`,
-      arguments: args.map((value) => ({
-        value,
-      })),
+      })()`,
       awaitPromise: true,
       returnByValue: true,
     })) as RuntimeEvaluationResult;
@@ -1086,11 +1154,22 @@ export class LiveCdpPage extends EventEmitter {
     if (event.method === "Page.frameNavigated") {
       const frame =
         typeof event.params.frame === "object" && event.params.frame !== null
-          ? (event.params.frame as { parentId?: unknown; url?: unknown })
+          ? (event.params.frame as { id?: unknown; parentId?: unknown; url?: unknown })
           : undefined;
       if (frame && frame.parentId === undefined && typeof frame.url === "string") {
+        if (typeof frame.id === "string") {
+          this.#mainFrameId = frame.id;
+        }
         this.#url = frame.url;
       }
+    }
+
+    if (
+      event.method === "Page.navigatedWithinDocument" &&
+      typeof event.params.url === "string" &&
+      (typeof event.params.frameId !== "string" || event.params.frameId === this.#mainFrameId)
+    ) {
+      this.#url = event.params.url;
     }
 
     this.emit(`cdp:${event.method}`, event.params);
@@ -1112,6 +1191,11 @@ export class LiveCdpPage extends EventEmitter {
 
   private waitForSessionEvent(method: string, timeout: number): Promise<void> {
     return new Promise<void>((resolve, reject) => {
+      if (this.#closed) {
+        reject(new Error(`Page target ${this.targetId} is closed while waiting for ${method}`));
+        return;
+      }
+
       const timeoutId = setTimeout(() => {
         cleanup();
         reject(new Error(`Timed out waiting for ${method}`));
@@ -1120,12 +1204,18 @@ export class LiveCdpPage extends EventEmitter {
         cleanup();
         resolve();
       };
+      const handleClose = () => {
+        cleanup();
+        reject(new Error(`Page target ${this.targetId} closed while waiting for ${method}`));
+      };
       const cleanup = () => {
         clearTimeout(timeoutId);
         this.off(`cdp:${method}`, handleEvent);
+        this.off("close", handleClose);
       };
 
       this.on(`cdp:${method}`, handleEvent);
+      this.on("close", handleClose);
     });
   }
 }
@@ -1424,6 +1514,55 @@ function normalizeLocatorDescriptor(
     index: descriptor.index ?? null,
     hasText: descriptor.hasText ?? null,
   };
+}
+
+function compareTargetAttachPriority(left: TargetInfo, right: TargetInfo): number {
+  const leftIsYoetz = isYoetzTarget(left);
+  const rightIsYoetz = isYoetzTarget(right);
+
+  if (leftIsYoetz !== rightIsYoetz) {
+    return leftIsYoetz ? -1 : 1;
+  }
+
+  return 0;
+}
+
+function isYoetzTarget(targetInfo: TargetInfo): boolean {
+  const url = targetInfo.url ?? "";
+  if (url.length === 0) {
+    return false;
+  }
+
+  try {
+    return new URL(url).searchParams.has("_yoetz");
+  } catch {
+    return /[?&]_yoetz(?:=|&|$)/.test(url);
+  }
+}
+
+function serializeRuntimeArgument(value: unknown): string {
+  if (value === undefined) {
+    return "undefined";
+  }
+
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) {
+      return "NaN";
+    }
+    if (value === Infinity) {
+      return "Infinity";
+    }
+    if (value === -Infinity) {
+      return "-Infinity";
+    }
+  }
+
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) {
+    throw new Error(`Cannot pass ${typeof value} to live-CDP evaluation`);
+  }
+
+  return serialized;
 }
 
 function readRuntimeResult(result: RuntimeEvaluationResult): unknown {
