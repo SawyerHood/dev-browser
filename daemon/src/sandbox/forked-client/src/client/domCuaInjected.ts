@@ -9,8 +9,7 @@
 // daemon/scripts/bundle-sandbox-client.ts.
 
 export const domCuaWalker = function (options) {
-  const maxElements =
-    options && typeof options.maxElements === "number" ? options.maxElements : 50;
+  const maxElements = options && typeof options.maxElements === "number" ? options.maxElements : 50;
 
   const INTERACTIVE_TAGS = {
     a: 1,
@@ -67,8 +66,7 @@ export const domCuaWalker = function (options) {
   }
   if (!(state.elementToRef instanceof WeakMap)) state.elementToRef = new WeakMap();
   if (typeof state.nextRef !== "number") state.nextRef = 1;
-  if (typeof state.docToken !== "string")
-    state.docToken = Date.now() + "-" + Math.random();
+  if (typeof state.docToken !== "string") state.docToken = Date.now() + "-" + Math.random();
   const refToElement = new Map();
   state.refToElement = refToElement;
   if (state.refToElement !== refToElement || !(state.elementToRef instanceof WeakMap))
@@ -109,9 +107,7 @@ export const domCuaWalker = function (options) {
   function isTextVisible(element) {
     const style = getComputedStyle(element);
     return (
-      style.visibility === "visible" &&
-      style.display !== "none" &&
-      parseFloat(style.opacity) > 0.01
+      style.visibility === "visible" && style.display !== "none" && parseFloat(style.opacity) > 0.01
     );
   }
 
@@ -207,12 +203,7 @@ export const domCuaWalker = function (options) {
     if (node.getAttribute("aria-hidden") === "true" || node.hasAttribute("hidden")) return;
     const hiddenInput =
       tag === "input" && (node.getAttribute("type") || "").toLowerCase() === "hidden";
-    if (
-      !hiddenInput &&
-      isInteractive(node) &&
-      isStyleVisible(node) &&
-      intersectsViewport(node)
-    ) {
+    if (!hiddenInput && isInteractive(node) && isStyleVisible(node) && intersectsViewport(node)) {
       if (entries.length >= maxElements) {
         truncated = true;
         return;

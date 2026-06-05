@@ -376,9 +376,7 @@ function stubElement(
     shadowRoot: shadowChildren
       ? {
           childNodes: shadowChildren,
-          children: shadowChildren.filter(
-            (child): child is StubElement => child.nodeType === 1
-          ),
+          children: shadowChildren.filter((child): child is StubElement => child.nodeType === 1),
         }
       : null,
     getAttribute: (name) =>
