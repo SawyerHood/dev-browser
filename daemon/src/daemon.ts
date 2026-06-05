@@ -42,6 +42,7 @@ const clients = new Set<net.Socket>();
 
 let server: net.Server | null = null;
 let shuttingDown: Promise<void> | null = null;
+let ownsEndpoint = false;
 
 async function writeMessage(socket: net.Socket, message: Response): Promise<void> {
   if (socket.destroyed) {
@@ -369,9 +370,15 @@ async function shutdown(exitCode = 0): Promise<void> {
     await manager.stopAll();
     await Promise.allSettled(Array.from(clients, (socket) => closeClientSocket(socket)));
     await serverClosed;
-    const cleanup = [unlinkIfExists(PID_PATH)];
-    if (requiresDaemonEndpointCleanup()) {
-      cleanup.push(unlinkIfExists(SOCKET_PATH));
+    // Only remove the pid file and socket path if this process successfully
+    // bound them; otherwise a daemon that lost the startup race would delete
+    // the live daemon's endpoint.
+    const cleanup: Promise<void>[] = [];
+    if (ownsEndpoint) {
+      cleanup.push(unlinkIfExists(PID_PATH));
+      if (requiresDaemonEndpointCleanup()) {
+        cleanup.push(unlinkIfExists(SOCKET_PATH));
+      }
     }
     await Promise.allSettled(cleanup);
 
@@ -383,13 +390,31 @@ async function shutdown(exitCode = 0): Promise<void> {
   return shuttingDown;
 }
 
+async function isEndpointActive(endpoint: string): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const probe = net.connect(endpoint);
+    const finish = (active: boolean) => {
+      probe.destroy();
+      resolve(active);
+    };
+    probe.once("connect", () => finish(true));
+    probe.once("error", () => finish(false));
+  });
+}
+
 async function start(): Promise<void> {
   await mkdir(BASE_DIR, { recursive: true });
   await ensureDevBrowserTempDir();
   if (requiresDaemonEndpointCleanup()) {
+    // Unlinking a live Unix socket path does not stop the bound server — it
+    // would silently split clients between two daemons. Only replace the
+    // socket path if nothing is listening on it.
+    if (await isEndpointActive(SOCKET_PATH)) {
+      process.stderr.write("daemon already running\n");
+      process.exit(0);
+    }
     await unlinkIfExists(SOCKET_PATH);
   }
-  await writeFile(PID_PATH, `${process.pid}\n`);
 
   server = net.createServer((socket) => {
     if (shuttingDown) {
@@ -468,6 +493,9 @@ async function start(): Promise<void> {
       resolve();
     });
   });
+
+  ownsEndpoint = true;
+  await writeFile(PID_PATH, `${process.pid}\n`);
 
   process.stderr.write("daemon ready\n");
 }

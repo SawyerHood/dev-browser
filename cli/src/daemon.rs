@@ -37,6 +37,14 @@ pub fn ensure_daemon() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
+    // Hold an exclusive lock while spawning so concurrent CLI invocations on a
+    // cold start cannot each spawn a daemon and race on the socket path. The
+    // lock is released when the file handle drops.
+    let _spawn_lock = acquire_spawn_lock()?;
+    if is_daemon_running() {
+        return Ok(());
+    }
+
     let command = find_daemon_command()?;
     if command.requires_runtime_install && !embedded_runtime_installed(&command.current_dir) {
         return Err(
@@ -85,6 +93,18 @@ pub fn install_daemon_runtime() -> Result<(), Box<dyn Error>> {
 
 pub fn is_daemon_running() -> bool {
     connect_to_daemon().is_ok()
+}
+
+fn acquire_spawn_lock() -> Result<fs::File, Box<dyn Error>> {
+    let base_dir = daemon_base_dir()?;
+    fs::create_dir_all(&base_dir)?;
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(base_dir.join("daemon-spawn.lock"))?;
+    lock_file.lock()?;
+    Ok(lock_file)
 }
 
 pub fn current_daemon_pid() -> Option<i32> {
