@@ -22,6 +22,7 @@ const PID_PATH = getPidPath();
 const BROWSERS_DIR = getBrowsersDir();
 const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
 const SOCKET_CLOSE_TIMEOUT_MS = 500;
+const MAX_FRAME_BYTES = 10 * 1024 * 1024;
 const EMBEDDED_PACKAGE_JSON = JSON.stringify({
   name: "dev-browser-runtime",
   private: true,
@@ -403,9 +404,27 @@ async function start(): Promise<void> {
     let queue = Promise.resolve();
 
     socket.on("data", (chunk: string) => {
+      if (socket.destroyed) {
+        return;
+      }
+
       buffer += chunk;
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
+
+      if (buffer.length > MAX_FRAME_BYTES || lines.some((line) => line.length > MAX_FRAME_BYTES)) {
+        buffer = "";
+        void writeMessage(socket, {
+          id: "unknown",
+          type: "error",
+          message: `Request exceeds the maximum frame size of ${MAX_FRAME_BYTES} bytes`,
+        })
+          .catch(() => undefined)
+          .finally(() => {
+            socket.destroy();
+          });
+        return;
+      }
 
       for (const rawLine of lines) {
         const line = rawLine.trim();
