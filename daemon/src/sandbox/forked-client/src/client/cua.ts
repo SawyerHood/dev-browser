@@ -12,6 +12,25 @@ function assertButton(button: string): void {
   }
 }
 
+function jpegDimensions(buffer: Buffer): { width: number; height: number } | null {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset++;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc)
+      return {
+        height: (buffer[offset + 5] << 8) | buffer[offset + 6],
+        width: (buffer[offset + 7] << 8) | buffer[offset + 8],
+      };
+    offset += 2 + ((buffer[offset + 2] << 8) | buffer[offset + 3]);
+  }
+  return null;
+}
+
 export class Cua {
   #page: Page;
 
@@ -136,17 +155,13 @@ export class Cua {
     fullPage?: boolean;
     clip?: { x: number; y: number; width: number; height: number };
   } = {}): Promise<{ path: string; width: number; height: number }> {
-    const buffer = await this.#page.screenshot({
+    let buffer = await this.#page.screenshot({
       type: "jpeg",
       quality: 80,
       scale: "css",
       fullPage,
       clip,
     });
-    const save = globalThis.saveScreenshot;
-    if (typeof save !== "function")
-      throw new Error("saveScreenshot() is not available in the QuickJS sandbox");
-    const path = await save(buffer, (name ?? `cua-${this.#page._guid}`) + ".jpeg");
     let width: number;
     let height: number;
     if (clip) {
@@ -160,7 +175,41 @@ export class Cua {
     } else {
       [width, height] = await this.#page.evaluate(() => [innerWidth, innerHeight]);
     }
+    width = Math.round(width);
+    height = Math.round(height);
+    // Playwright ignores scale:"css" on viewport:null pages (headed and
+    // connected Chrome), returning device-pixel images that break the 1:1
+    // coordinate contract — downscale in-page when the dims disagree.
+    const actual = jpegDimensions(buffer);
+    if (actual && (Math.abs(actual.width - width) > 1 || Math.abs(actual.height - height) > 1))
+      buffer = await this.#downscaleToCssPixels(buffer, width, height);
+    const save = globalThis.saveScreenshot;
+    if (typeof save !== "function")
+      throw new Error("saveScreenshot() is not available in the QuickJS sandbox");
+    const path = await save(buffer, (name ?? `cua-${this.#page._guid}`) + ".jpeg");
     return { path, width, height };
+  }
+
+  async #downscaleToCssPixels(buffer: Buffer, width: number, height: number): Promise<Buffer> {
+    const base64 = await this.#page.evaluate(
+      async ({ data, width, height }) => {
+        const raw = atob(data);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+        const canvas = new OffscreenCanvas(width, height);
+        canvas.getContext("2d").drawImage(bitmap, 0, 0, width, height);
+        bitmap.close();
+        const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.8 });
+        const out = new Uint8Array(await blob.arrayBuffer());
+        let binary = "";
+        for (let i = 0; i < out.length; i += 0x8000)
+          binary += String.fromCharCode.apply(null, out.subarray(i, i + 0x8000));
+        return btoa(binary);
+      },
+      { data: buffer.toString("base64"), width, height }
+    );
+    return Buffer.from(base64, "base64");
   }
 
   async #withModifiers(modifiers: string[], act: () => Promise<void>): Promise<void> {

@@ -818,6 +818,38 @@ describe.sequential("QuickJS page.cua toolset", () => {
         height: result.shot.height,
       });
     }, 30_000);
+
+    it("downscales device-pixel screenshots back to css pixels", async () => {
+      const result = await harness.runJson<{
+        shot: ScreenshotResult;
+        dims: [number, number];
+      }>(
+        withCuaPage(
+          "cua-shot-retina",
+          `
+          const dims = await page.evaluate(() => [innerWidth, innerHeight]);
+          const oversized = await page.screenshot({
+            type: "jpeg",
+            quality: 80,
+            clip: { x: 0, y: 0, width: dims[0] * 2, height: dims[1] * 2 },
+          });
+          page.screenshot = async () => oversized;
+          const shot = await page.cua.screenshot({ name: "cua-retina-test" });
+          console.log(JSON.stringify({ shot, dims }));
+        `
+        )
+      );
+      screenshotCleanup.add(result.shot.path);
+
+      expect(result.shot.width).toBe(result.dims[0]);
+      expect(result.shot.height).toBe(result.dims[1]);
+
+      const data = await readFile(result.shot.path);
+      expect(readJpegDimensions(data)).toEqual({
+        width: result.shot.width,
+        height: result.shot.height,
+      });
+    }, 30_000);
   });
 
   describe.sequential("navigation waiting", () => {
