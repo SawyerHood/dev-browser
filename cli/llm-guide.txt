@@ -40,6 +40,54 @@ LLM USAGE GUIDE:
   Choosing your approach:
     Unknown pages: use page.snapshotForAI() first to discover the page, then interact based on what you find.
     Known pages/selectors: skip the snapshot and use direct Playwright selectors like page.click(), page.fill(), or page.locator() for faster, more reliable automation.
+    Prefer locators/snapshotForAI first; switch to page.domCua node ids when a unique stable locator can't be built or after 2 failed locator attempts on the same target; switch to page.cua coordinates when the visual structure is clearer than the DOM.
+    After acting, collect the cheapest state check; don't take both a snapshot and a screenshot by default.
+
+  Vision workflow (page.cua):
+    Coordinate-based control across two scripts on a named page.
+    Script 1 - look: take a screenshot, then read the saved image to pick coordinates.
+    dev-browser <<'EOF'
+    const page = await browser.getPage("checkout");
+    const shot = await page.cua.screenshot();
+    console.log(JSON.stringify(shot));
+    // {"path":"/Users/you/.dev-browser/tmp/cua-page_abc123.jpeg","width":1280,"height":720}
+    EOF
+    Script 2 - act: click at the coordinates measured on the image.
+    dev-browser <<'EOF'
+    const page = await browser.getPage("checkout");
+    await page.cua.click({ x: 412, y: 233 });
+    console.log(page.url());
+    EOF
+    Pixel coordinates measured on the saved image map 1:1 onto page.cua coordinates (any display, any DPR).
+    Always use a named page so coordinates stay valid between scripts.
+    This holds for viewport and clip screenshots only — never derive click coordinates from a fullPage capture; scroll, then re-screenshot.
+    Also available: cua.doubleClick({x, y}), cua.drag({path: [{x, y}, ...]}), cua.move({x, y}),
+    cua.scroll({x, y, scrollX, scrollY}) (positive scrollY scrolls content down),
+    cua.keypress({keys: ["ctrl", "a"]}), cua.type({text}).
+    cua.click and domCua.click wait ~1s for a click-triggered navigation (then up to 10s for the load);
+    pass waitForNavigation: false to skip that grace wait in tight loops.
+
+  DOM-id workflow (page.domCua):
+    Snapshot the visible interactive elements, then act on them by node id.
+    dev-browser <<'EOF'
+    const page = await browser.getPage("checkout");
+    console.log(await page.domCua.getVisibleDom());
+    // <input node_id=1 type="text" placeholder="name here" />
+    // <button node_id=2>Submit</button>
+    // <a node_id=3 href="https://example.com">Example link</a>
+    EOF
+    dev-browser <<'EOF'
+    const page = await browser.getPage("checkout");
+    await page.domCua.click({ nodeId: 2 });
+    console.log(page.url());
+    EOF
+    Ids are only valid against the latest snapshot of the current document.
+    A "DOM node N is stale or missing — re-run getVisibleDom()" error means the id predates the latest snapshot or the document changed; re-run getVisibleDom() and use the fresh ids.
+    Re-snapshot after every navigation - ids from the old document never act on the new one.
+    The snapshot only includes elements visible in the viewport; scroll and re-snapshot to see more.
+    A truncation marker line appears when the snapshot budget is hit.
+    Also available: domCua.doubleClick({nodeId}), domCua.scroll({scrollX, scrollY, nodeId?}),
+    domCua.type({text}) and domCua.keypress({keys}) (both act on the focused element - click first).
 
   Screenshots for visual state:
     dev-browser <<'EOF'
@@ -96,6 +144,11 @@ LLM USAGE GUIDE:
     page.waitForSelector(selector)         Wait for an element to appear
     page.waitForURL(url)                   Wait for navigation to a URL
     page.screenshot()                      Capture a screenshot buffer; save it with saveScreenshot(...)
+    page.cua.screenshot(options)           Save a JPEG for the vision workflow; returns { path, width, height }
+                                           Options: { name?: string, fullPage?: boolean, clip? }
+    page.cua.click({ x, y })               Click at viewport coordinates measured on a cua screenshot
+    page.domCua.getVisibleDom()            Snapshot visible interactive elements as node_id=N lines
+    page.domCua.click({ nodeId })          Click an element by node id from the latest snapshot
     page.$$eval(selector, fn)              Run a function on all matching elements
     page.$eval(selector, fn)               Run a function on the first matching element
     page.evaluate(fn)                      Run JavaScript in the page context (plain JS only)

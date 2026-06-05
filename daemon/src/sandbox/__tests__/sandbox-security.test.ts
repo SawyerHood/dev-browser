@@ -170,6 +170,35 @@ describe.sequential("QuickJS sandbox security", () => {
     expect(payload.browserHasNullPrototype).toBe(true);
   }, 120_000);
 
+  it("exposes the cua and domCua namespaces on pages", async () => {
+    const output = await runSandboxScript(`
+      const page = await browser.newPage();
+      console.log(
+        JSON.stringify({
+          cuaClick: typeof page.cua.click,
+          cuaScreenshot: typeof page.cua.screenshot,
+          domCuaGetVisibleDom: typeof page.domCua.getVisibleDom,
+          domCuaClick: typeof page.domCua.click,
+        }),
+      );
+    `);
+
+    expect(output.stderr).toEqual([]);
+    expect(output.stdout).toHaveLength(1);
+
+    const reportLine = output.stdout[0];
+    if (reportLine === undefined) {
+      throw new Error("Sandbox namespace report was not captured");
+    }
+
+    expect(JSON.parse(reportLine)).toEqual({
+      cuaClick: "function",
+      cuaScreenshot: "function",
+      domCuaGetVisibleDom: "function",
+      domCuaClick: "function",
+    });
+  }, 120_000);
+
   it("captures console output without leaking to host stdout", async () => {
     const output = createOutput();
     const stdoutSpy = vi.spyOn(process.stdout, "write");
