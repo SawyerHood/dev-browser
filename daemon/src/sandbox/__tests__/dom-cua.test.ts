@@ -568,6 +568,22 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       expect(result.clicks).toEqual([{ target: "two", x: 80, y: 86 }]);
     }, 30_000);
 
+    it("accepts a numeric-string nodeId as regexed from the snapshot text", async () => {
+      const firstUrl = `${server.baseUrl}/dom/first`;
+      const result = await harness.runJson<{
+        clicks: Array<{ target: string; x: number; y: number }>;
+      }>(`
+        ${ID_HELPERS}
+        const page = await browser.getPage("dom-cua-act-string-id");
+        await page.goto(${JSON.stringify(firstUrl)}, { waitUntil: "load" });
+        const snapshot = await page.domCua.getVisibleDom();
+        await page.domCua.click({ nodeId: String(idFor(snapshot, ">Two<")), waitForNavigation: false });
+        console.log(JSON.stringify({ clicks: await page.evaluate(() => window.clicks) }));
+      `);
+
+      expect(result.clicks).toEqual([{ target: "two", x: 80, y: 86 }]);
+    }, 30_000);
+
     it("clicks elements inside an iframe at frame-offset coordinates", async () => {
       const hostUrl = `${server.baseUrl}/dom/iframe-host`;
       const result = await harness.runJson<{

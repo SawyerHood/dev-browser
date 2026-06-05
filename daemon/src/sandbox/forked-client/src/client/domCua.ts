@@ -111,7 +111,7 @@ export class DomCua {
     modifiers = [],
     waitForNavigation = true,
   }: {
-    nodeId: number;
+    nodeId: number | string;
     button?: "left" | "middle" | "right";
     modifiers?: string[];
     waitForNavigation?: boolean;
@@ -120,7 +120,7 @@ export class DomCua {
     await this.#page.cua.click({ x, y, button, modifiers, waitForNavigation });
   }
 
-  async doubleClick({ nodeId }: { nodeId: number }): Promise<void> {
+  async doubleClick({ nodeId }: { nodeId: number | string }): Promise<void> {
     const { x, y } = await this.#resolveNodeCenter(nodeId);
     await this.#page.cua.click({ x, y, clickCount: 2 });
   }
@@ -132,7 +132,7 @@ export class DomCua {
   }: {
     scrollX?: number;
     scrollY?: number;
-    nodeId?: number;
+    nodeId?: number | string;
   }): Promise<void> {
     let x: number;
     let y: number;
@@ -154,7 +154,8 @@ export class DomCua {
     await this.#page.cua.keypress({ keys });
   }
 
-  async #resolveNodeCenter(nodeId: number): Promise<{ x: number; y: number }> {
+  async #resolveNodeCenter(nodeId: number | string): Promise<{ x: number; y: number }> {
+    if (typeof nodeId === "string" && /^\d+$/.test(nodeId)) nodeId = Number(nodeId);
     if (typeof nodeId !== "number")
       throw new Error("domCua requires a numeric nodeId from getVisibleDom()");
     const target = await this.#page
