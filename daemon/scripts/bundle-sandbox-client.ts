@@ -9,6 +9,10 @@ const outfile = resolve(daemonDir, "dist/sandbox-client.js");
 
 await mkdir(dirname(outfile), { recursive: true });
 
+// WARNING: src/sandbox/forked-client/src/client/domCuaInjected.ts exports
+// functions that are serialized with String(fn) and re-evaluated inside the
+// page. Do not add flags that rewrite function bodies (minify, keepNames) —
+// they would corrupt the serialized source.
 await build({
   entryPoints: [entryPoint],
   bundle: true,
