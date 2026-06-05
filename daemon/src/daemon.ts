@@ -34,6 +34,15 @@ const EMBEDDED_PACKAGE_JSON = JSON.stringify({
   },
 });
 
+// Chrome 147's built-in remote debugging does not emit Target.attachedToTarget
+// for some target types, which hangs connectOverCDP unless Playwright is
+// allowed to attach to "other" targets. Respect an explicit user override.
+// See https://github.com/SawyerHood/dev-browser/issues/103 and
+// https://github.com/microsoft/playwright/issues/40027.
+if (process.env.PW_CHROMIUM_ATTACH_TO_OTHER === undefined) {
+  process.env.PW_CHROMIUM_ATTACH_TO_OTHER = "1";
+}
+
 const manager = new BrowserManager(BROWSERS_DIR);
 const startedAt = Date.now();
 const withBrowserLock = createKeyedLock<string>();
