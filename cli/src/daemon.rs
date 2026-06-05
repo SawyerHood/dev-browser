@@ -103,7 +103,19 @@ fn acquire_spawn_lock() -> Result<fs::File, Box<dyn Error>> {
         .truncate(false)
         .write(true)
         .open(base_dir.join("daemon-spawn.lock"))?;
-    lock_file.lock()?;
+
+    // Use flock(2) rather than std::fs::File::lock so the CLI keeps a low MSRV
+    // (File::lock was only stabilized in Rust 1.89). The advisory lock releases
+    // when the returned handle drops. Best-effort on non-Unix: the daemon-side
+    // bind also serializes concurrent starts.
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+    }
+
     Ok(lock_file)
 }
 
@@ -257,7 +269,12 @@ fn sync_text_file(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
     };
 
     if needs_update {
-        fs::write(path, contents)?;
+        // Write to a per-process temp file and rename into place so a
+        // concurrent daemon spawn reading this file never observes a partial
+        // (truncated) write.
+        let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+        fs::write(&tmp_path, contents)?;
+        fs::rename(&tmp_path, path)?;
     }
 
     Ok(())

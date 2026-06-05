@@ -22,7 +22,10 @@ const PID_PATH = getPidPath();
 const BROWSERS_DIR = getBrowsersDir();
 const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
 const SOCKET_CLOSE_TIMEOUT_MS = 500;
-const MAX_FRAME_BYTES = 10 * 1024 * 1024;
+// Bounds the in-memory request buffer. The socket decodes to UTF-8 strings, so
+// this is measured in JavaScript string length (UTF-16 code units), which is
+// what caps the JS string we actually retain.
+const MAX_FRAME_CHARS = 10 * 1024 * 1024;
 const EMBEDDED_PACKAGE_JSON = JSON.stringify({
   name: "dev-browser-runtime",
   private: true,
@@ -411,19 +414,45 @@ async function isEndpointActive(endpoint: string): Promise<boolean> {
   });
 }
 
+function listenOnEndpoint(target: net.Server): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => reject(error);
+    target.once("error", onError);
+    target.listen(SOCKET_PATH, () => {
+      target.off("error", onError);
+      resolve();
+    });
+  });
+}
+
+async function bindEndpoint(target: net.Server): Promise<void> {
+  try {
+    await listenOnEndpoint(target);
+    return;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Binding is the atomic claim. Only fall back to replacing the path when
+    // the bind actually failed because the path already exists.
+    if (code !== "EADDRINUSE" || !requiresDaemonEndpointCleanup()) {
+      throw error;
+    }
+  }
+
+  // The path exists. If a live daemon answers, defer to it; unlinking a bound
+  // Unix socket would not stop it and would only split clients between daemons.
+  if (await isEndpointActive(SOCKET_PATH)) {
+    process.stderr.write("daemon already running\n");
+    process.exit(0);
+  }
+
+  // Stale socket file from a crashed daemon — remove it and claim the path.
+  await unlinkIfExists(SOCKET_PATH);
+  await listenOnEndpoint(target);
+}
+
 async function start(): Promise<void> {
   await mkdir(BASE_DIR, { recursive: true });
   await ensureDevBrowserTempDir();
-  if (requiresDaemonEndpointCleanup()) {
-    // Unlinking a live Unix socket path does not stop the bound server — it
-    // would silently split clients between two daemons. Only replace the
-    // socket path if nothing is listening on it.
-    if (await isEndpointActive(SOCKET_PATH)) {
-      process.stderr.write("daemon already running\n");
-      process.exit(0);
-    }
-    await unlinkIfExists(SOCKET_PATH);
-  }
 
   server = net.createServer((socket) => {
     if (shuttingDown) {
@@ -438,20 +467,20 @@ async function start(): Promise<void> {
     let queue = Promise.resolve();
 
     socket.on("data", (chunk: string) => {
-      if (socket.destroyed) {
-        return;
-      }
-
       buffer += chunk;
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
-      if (buffer.length > MAX_FRAME_BYTES || lines.some((line) => line.length > MAX_FRAME_BYTES)) {
+      if (buffer.length > MAX_FRAME_CHARS || lines.some((line) => line.length > MAX_FRAME_CHARS)) {
+        // Pause synchronously so the unparsed remainder of an oversized frame
+        // cannot be reinterpreted as fresh requests while the error response
+        // drains (the write callback may be deferred under backpressure).
+        socket.pause();
         buffer = "";
         void writeMessage(socket, {
           id: "unknown",
           type: "error",
-          message: `Request exceeds the maximum frame size of ${MAX_FRAME_BYTES} bytes`,
+          message: `Request exceeds the maximum frame size of ${MAX_FRAME_CHARS} characters`,
         })
           .catch(() => undefined)
           .finally(() => {
@@ -490,17 +519,13 @@ async function start(): Promise<void> {
     });
   });
 
+  await bindEndpoint(server);
+
+  // Only attach the runtime error handler after a successful bind so a bind
+  // failure handled by bindEndpoint cannot also trip a shutdown.
   server.on("error", (error) => {
     console.error("Daemon server error:", error);
     void shutdown(1);
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server?.once("error", reject);
-    server?.listen(SOCKET_PATH, () => {
-      server?.off("error", reject);
-      resolve();
-    });
   });
 
   ownsEndpoint = true;
