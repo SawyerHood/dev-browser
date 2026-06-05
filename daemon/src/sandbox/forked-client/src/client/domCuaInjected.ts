@@ -67,6 +67,8 @@ export const domCuaWalker = function (options) {
   }
   if (!(state.elementToRef instanceof WeakMap)) state.elementToRef = new WeakMap();
   if (typeof state.nextRef !== "number") state.nextRef = 1;
+  if (typeof state.docToken !== "string")
+    state.docToken = Date.now() + "-" + Math.random();
   const refToElement = new Map();
   state.refToElement = refToElement;
   if (state.refToElement !== refToElement || !(state.elementToRef instanceof WeakMap))
@@ -239,7 +241,7 @@ export const domCuaWalker = function (options) {
 
   const root = document.body || document.documentElement;
   if (root) visit(root);
-  return { blocked: false, entries, truncated };
+  return { blocked: false, entries, truncated, docToken: state.docToken };
 };
 
 export const domCuaRegister = function (data) {
@@ -261,19 +263,7 @@ export const domCuaRegister = function (data) {
       stored = null;
     }
     const parsed = stored === null ? NaN : parseInt(stored, 10);
-    if (parsed >= 1) {
-      next = parsed;
-    } else {
-      next = 1;
-      let roundTrips = false;
-      try {
-        sessionStorage.setItem(STORAGE_KEY, "1");
-        roundTrips = sessionStorage.getItem(STORAGE_KEY) === "1";
-      } catch (error) {
-        roundTrips = false;
-      }
-      if (!roundTrips) next = 1_000_000 + Math.floor(Math.random() * 2_000_000_000);
-    }
+    next = parsed >= 1 ? parsed : 1_000_000 + Math.floor(Math.random() * 2_000_000_000);
   }
 
   if (!(state.publicIdByFrameKey instanceof Map)) state.publicIdByFrameKey = new Map();
@@ -291,10 +281,11 @@ export const domCuaRegister = function (data) {
   const ids = [];
   for (let i = 0; i < data.frames.length; i++) {
     const frame = data.frames[i];
-    let frameMap = sticky.get(frame.key);
+    const stickyKey = frame.key + "::" + frame.docToken;
+    let frameMap = sticky.get(stickyKey);
     if (!frameMap) {
       frameMap = new Map();
-      sticky.set(frame.key, frameMap);
+      sticky.set(stickyKey, frameMap);
     }
     const frameIds = [];
     for (let j = 0; j < frame.refs.length; j++) {

@@ -247,6 +247,32 @@ function domPageHtml(pathname: string): string {
     <button id="inner" style="position:fixed;left:10px;top:10px;width:100px;height:30px">Inner button</button>
   </body>
 </html>`;
+    case "/dom/named-frame-host":
+      return `<!DOCTYPE html>
+<html>
+  <head><title>Named Frame Host</title></head>
+  <body style="margin:0">
+    <iframe name="child" src="/dom/frame-one" style="position:fixed;left:20px;top:20px;width:400px;height:200px;border:0"></iframe>
+  </body>
+</html>`;
+    case "/dom/frame-one":
+      return `<!DOCTYPE html>
+<html>
+  <body style="margin:0">
+    <button id="fa" style="position:fixed;left:10px;top:10px;width:120px;height:30px">FrameOne</button>
+  </body>
+</html>`;
+    case "/dom/frame-two":
+      return `<!DOCTYPE html>
+<html>
+  <body style="margin:0">
+    <script>
+      window.frameClicks = [];
+      document.addEventListener("click", (event) => window.frameClicks.push(event.target.id));
+    </script>
+    <button id="fb" style="position:fixed;left:10px;top:10px;width:120px;height:30px">FrameTwo</button>
+  </body>
+</html>`;
     case "/dom/frame-budget-host":
       return `<!DOCTYPE html>
 <html>
@@ -380,6 +406,7 @@ describe.sequential("QuickJS page.domCua toolset", () => {
   let browserRootDir = "";
   let manager: BrowserManager;
   let server: DomServer;
+  let crossOriginServer: DomServer;
 
   beforeAll(async () => {
     await ensureSandboxClientBundle();
@@ -387,11 +414,13 @@ describe.sequential("QuickJS page.domCua toolset", () => {
     browserRootDir = await mkdtemp(path.join(os.tmpdir(), "dev-browser-dom-cua-"));
     manager = new BrowserManager(path.join(browserRootDir, "browsers"));
     server = await createDomServer();
+    crossOriginServer = await createDomServer();
   }, 180_000);
 
   afterAll(async () => {
     await manager.stopAll();
     await server.close();
+    await crossOriginServer.close();
     await removeDirectoryWithRetries(browserRootDir);
   }, 180_000);
 
@@ -718,6 +747,71 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       expect(result.error).toContain("stale or missing — re-run getVisibleDom()");
       expect(result.clicks).toEqual([]);
     }, 30_000);
+
+    it("never reuses pre-navigation ids across cross-origin navigations", async () => {
+      const firstUrl = `${server.baseUrl}/dom/first`;
+      const secondUrl = `${crossOriginServer.baseUrl}/dom/second`;
+      const result = await harness.runJson<{
+        preNavIds: number[];
+        postNavIds: number[];
+        error: string | null;
+        clicks: Array<{ target: string }>;
+      }>(`
+        ${ID_HELPERS}
+        const page = await browser.getPage("dom-cua-cross-origin");
+        await page.goto(${JSON.stringify(firstUrl)}, { waitUntil: "load" });
+        const preNavIds = allIds(await page.domCua.getVisibleDom());
+        await page.goto(${JSON.stringify(secondUrl)}, { waitUntil: "load" });
+        const postNavIds = allIds(await page.domCua.getVisibleDom());
+        let error = null;
+        try {
+          await page.domCua.click({ nodeId: preNavIds[0] });
+        } catch (caught) {
+          error = String((caught && caught.message) || caught);
+        }
+        const clicks = await page.evaluate(() => window.clicks);
+        console.log(JSON.stringify({ preNavIds, postNavIds, error, clicks }));
+      `);
+
+      expect(result.preNavIds).toHaveLength(3);
+      expect(result.postNavIds).toHaveLength(5);
+      expect(result.postNavIds.filter((id) => result.preNavIds.includes(id))).toEqual([]);
+      expect(result.error).toContain("stale or missing — re-run getVisibleDom()");
+      expect(result.clicks).toEqual([]);
+    }, 30_000);
+
+    it("assigns fresh ids after a child-frame navigation and stales the old ones", async () => {
+      const hostUrl = `${server.baseUrl}/dom/named-frame-host`;
+      const frameTwoUrl = `${server.baseUrl}/dom/frame-two`;
+      const result = await harness.runJson<{
+        oldId: number;
+        newId: number;
+        error: string | null;
+        frameClicks: string[];
+      }>(`
+        ${ID_HELPERS}
+        const page = await browser.getPage("dom-cua-frame-nav");
+        await page.goto(${JSON.stringify(hostUrl)}, { waitUntil: "load" });
+        const first = await page.domCua.getVisibleDom();
+        const oldId = idFor(first, ">FrameOne<");
+        const frame = page.frames().find((candidate) => candidate.name() === "child");
+        await frame.goto(${JSON.stringify(frameTwoUrl)}, { waitUntil: "load" });
+        const second = await page.domCua.getVisibleDom();
+        const newId = idFor(second, ">FrameTwo<");
+        let error = null;
+        try {
+          await page.domCua.click({ nodeId: oldId, waitForNavigation: false });
+        } catch (caught) {
+          error = String((caught && caught.message) || caught);
+        }
+        const frameClicks = await frame.evaluate(() => window.frameClicks);
+        console.log(JSON.stringify({ oldId, newId, error, frameClicks }));
+      `);
+
+      expect(result.newId).toBeGreaterThan(result.oldId);
+      expect(result.error).toContain("stale or missing — re-run getVisibleDom()");
+      expect(result.frameClicks).toEqual([]);
+    }, 30_000);
   });
 
   describe.sequential("cross-invocation", () => {
@@ -787,6 +881,7 @@ describe.sequential("QuickJS page.domCua toolset", () => {
 
       expect(result.blocked).toBe(false);
       expect(result.truncated).toBe(false);
+      expect(typeof result.docToken).toBe("string");
       expect(result.entries.map((entry: { line: string }) => entry.line)).toEqual([
         '<input node_id=1 placeholder="name here" type="text" />',
         "<button node_id=2>Submit</button>",
@@ -796,6 +891,7 @@ describe.sequential("QuickJS page.domCua toolset", () => {
 
       const again = walkerInRealm({ maxElements: 50 });
       expect(again.entries.map((entry: { ref: number }) => entry.ref)).toEqual([1, 2, 3, 4]);
+      expect(again.docToken).toBe(result.docToken);
 
       const capped = walkerInRealm({ maxElements: 2 });
       expect(capped.truncated).toBe(true);
@@ -806,16 +902,50 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       const realm = createIsolatedRealm(stubElement("body"));
       const registerInRealm = vm.runInContext(`(${String(domCuaRegister)})`, realm);
 
-      const first = registerInRealm({ frames: [{ key: "main", refs: [1, 2, 3] }] });
+      const first = registerInRealm({
+        frames: [{ key: "main", docToken: "doc-1", refs: [1, 2, 3] }],
+      });
       expect(first.blocked).toBe(false);
       expect(first.ids[0]).toHaveLength(3);
       expect(first.ids[0][0]).toBeGreaterThanOrEqual(1_000_000);
 
-      const second = registerInRealm({ frames: [{ key: "main", refs: [2, 3, 9] }] });
+      const second = registerInRealm({
+        frames: [{ key: "main", docToken: "doc-1", refs: [2, 3, 9] }],
+      });
       expect(second.blocked).toBe(false);
       expect(second.ids[0][0]).toBe(first.ids[0][1]);
       expect(second.ids[0][1]).toBe(first.ids[0][2]);
       expect(second.ids[0][2]).toBeGreaterThan(first.ids[0][2]);
+
+      const replaced = registerInRealm({
+        frames: [{ key: "main", docToken: "doc-2", refs: [1, 2, 3] }],
+      });
+      expect(replaced.blocked).toBe(false);
+      for (const id of replaced.ids[0]) {
+        expect(id).toBeGreaterThan(second.ids[0][2]);
+      }
+    });
+
+    it("starts at a high base when sessionStorage works but holds no counter", () => {
+      const storage = new Map<string, string>();
+      const realm = vm.createContext({
+        sessionStorage: {
+          getItem: (key: string) => (storage.has(key) ? storage.get(key)! : null),
+          setItem: (key: string, value: string) => {
+            storage.set(key, String(value));
+          },
+        },
+      });
+      const registerInRealm = vm.runInContext(`(${String(domCuaRegister)})`, realm);
+
+      const result = registerInRealm({
+        frames: [{ key: "main", docToken: "doc-1", refs: [1, 2] }],
+      });
+      expect(result.blocked).toBe(false);
+      expect(Math.min(...result.ids[0])).toBeGreaterThanOrEqual(1_000_000);
+      expect(Number(storage.get("__devBrowserDomCuaNextPublicId"))).toBeGreaterThan(
+        Math.max(...result.ids[0])
+      );
     });
   });
 });

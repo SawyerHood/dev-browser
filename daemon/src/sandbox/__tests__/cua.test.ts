@@ -461,6 +461,58 @@ describe.sequential("QuickJS page.cua toolset", () => {
       expect(result.clicks[1]!.shiftKey).toBe(false);
     }, 15_000);
 
+    it("releases already-pressed modifiers when a later key in the sequence is invalid", async () => {
+      const result = await harness.runJson<{
+        clickError: string | null;
+        keypressError: string | null;
+        clicks: RecordedClick[];
+        keyEvents: RecordedKeyEvent[];
+      }>(
+        withCuaPage(
+          "cua-modifier-release",
+          `
+          let clickError = null;
+          try {
+            await page.cua.click({
+              x: 350,
+              y: 250,
+              modifiers: ["shift", "bogus"],
+              waitForNavigation: false,
+            });
+          } catch (error) {
+            clickError = String((error && error.message) || error);
+          }
+          let keypressError = null;
+          try {
+            await page.cua.keypress({ keys: ["ctrl", "bogus", "c"] });
+          } catch (error) {
+            keypressError = String((error && error.message) || error);
+          }
+          await page.cua.click({ x: 350, y: 250, waitForNavigation: false });
+          await page.evaluate(() => {
+            window.keyEvents = [];
+          });
+          await page.cua.keypress({ keys: ["a"] });
+          console.log(JSON.stringify({
+            clickError,
+            keypressError,
+            clicks: await page.evaluate(() => window.clicks),
+            keyEvents: await page.evaluate(() => window.keyEvents),
+          }));
+        `
+        )
+      );
+
+      expect(result.clickError).toContain("bogus");
+      expect(result.keypressError).toContain("bogus");
+      expect(result.clicks).toHaveLength(1);
+      expect(result.clicks[0]!.shiftKey).toBe(false);
+      expect(result.keyEvents).toHaveLength(1);
+      expect(result.keyEvents[0]!.shiftKey).toBe(false);
+      expect(result.keyEvents[0]!.ctrlKey).toBe(false);
+      expect(result.keyEvents[0]!.metaKey).toBe(false);
+    }, 15_000);
+
     it("moves the pointer", async () => {
       const result = await harness.runJson<{ moves: RecordedMouseEvent[] }>(
         withCuaPage(
@@ -678,14 +730,16 @@ describe.sequential("QuickJS page.cua toolset", () => {
       });
     }, 15_000);
 
-    it("pins clip coordinate semantics", async () => {
+    it("pins clip coordinate semantics as viewport-relative", async () => {
       const result = await harness.runJson<{ shot: ScreenshotResult }>(
         withCuaPage(
           "cua-shot-clip",
           `
+          await page.evaluate(() => window.scrollTo(0, 150));
+          await page.waitForFunction(() => window.scrollY === 150, { timeout: 5000 });
           const shot = await page.cua.screenshot({
             name: "cua-clip-test",
-            clip: { x: 300, y: 200, width: 100, height: 100 },
+            clip: { x: 300, y: 50, width: 100, height: 100 },
           });
           console.log(JSON.stringify({ shot }));
         `

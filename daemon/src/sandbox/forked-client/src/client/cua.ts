@@ -106,11 +106,15 @@ export class Cua {
     const normalized = normalizeKeys(keys);
     if (normalized.length === 0) return;
     const held = normalized.slice(0, -1);
-    for (const key of held) await this.#page.keyboard.down(key);
+    const pressed: string[] = [];
     try {
+      for (const key of held) {
+        await this.#page.keyboard.down(key);
+        pressed.push(key);
+      }
       await this.#page.keyboard.press(normalized[normalized.length - 1]);
     } finally {
-      for (const key of held.reverse()) await this.#page.keyboard.up(key);
+      for (const key of pressed.reverse()) await this.#page.keyboard.up(key);
     }
   }
 
@@ -161,11 +165,15 @@ export class Cua {
 
   async #withModifiers(modifiers: string[], act: () => Promise<void>): Promise<void> {
     const keys = normalizeKeys(modifiers ?? []);
-    for (const key of keys) await this.#page.keyboard.down(key);
+    const pressed: string[] = [];
     try {
+      for (const key of keys) {
+        await this.#page.keyboard.down(key);
+        pressed.push(key);
+      }
       await act();
     } finally {
-      for (const key of keys.slice().reverse()) await this.#page.keyboard.up(key);
+      for (const key of pressed.reverse()) await this.#page.keyboard.up(key);
     }
   }
 

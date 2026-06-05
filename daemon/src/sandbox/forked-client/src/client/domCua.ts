@@ -48,6 +48,7 @@ export class DomCua {
     const frames = [mainFrame, ...this.#page.frames().filter((frame) => frame !== mainFrame)];
     const snapshots: Array<{
       key: string;
+      docToken: string;
       entries: Array<{ ref: number; line: string }>;
       truncated: boolean;
     }> = [];
@@ -66,12 +67,18 @@ export class DomCua {
         if (isMain) throw blockedStateError();
         continue;
       }
-      snapshots.push({ key: frameKey(frame), entries: result.entries, truncated: result.truncated });
+      snapshots.push({
+        key: frameKey(frame),
+        docToken: result.docToken,
+        entries: result.entries,
+        truncated: result.truncated,
+      });
     }
 
     const registration = await mainFrame.evaluate(domCuaRegister, {
       frames: snapshots.map((snapshot) => ({
         key: snapshot.key,
+        docToken: snapshot.docToken,
         refs: snapshot.entries.map((entry) => entry.ref),
       })),
     });
