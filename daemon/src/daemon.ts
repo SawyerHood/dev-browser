@@ -304,7 +304,7 @@ async function handleRequest(socket: net.Socket, line: string): Promise<void> {
       return;
 
     case "browser-stop":
-      await manager.stopBrowser(request.browser);
+      await withBrowserLock(request.browser, () => manager.stopBrowser(request.browser));
       await writeMessage(socket, {
         id: request.id,
         type: "result",
