@@ -3,6 +3,7 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { BrowserManager } from "./browser-manager.js";
+import { formatError } from "./format-error.js";
 import { createKeyedLock, createMutex } from "./lock.js";
 import {
   getBrowsersDir,
@@ -40,17 +41,6 @@ const clients = new Set<net.Socket>();
 
 let server: net.Server | null = null;
 let shuttingDown: Promise<void> | null = null;
-
-function formatError(error: unknown): string {
-  if (error instanceof Error) {
-    if (error.name === "ScriptTimeoutError") {
-      return error.message;
-    }
-    return error.stack ?? error.message;
-  }
-
-  return String(error);
-}
 
 async function writeMessage(socket: net.Socket, message: Response): Promise<void> {
   if (socket.destroyed) {

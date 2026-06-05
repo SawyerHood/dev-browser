@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { BrowserManager } from "../../browser-manager.js";
+import { formatError } from "../../format-error.js";
 import { removeDirectoryWithRetries } from "../../test-cleanup.js";
 import { runScript } from "../script-runner-quickjs.js";
 import { ensureSandboxClientBundle } from "./bundle-test-helpers.js";
@@ -132,6 +133,25 @@ describe.sequential("QuickJS sandbox integration", () => {
     ).rejects.toThrow("boom");
   });
 
+  it("surfaces thrown error messages in formatted errors", async () => {
+    const output = createOutput();
+
+    const error = await runScript(
+      `
+        throw new Error("boom message");
+      `,
+      manager,
+      "default",
+      output.sink
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(formatError(error)).toContain("boom message");
+  });
+
   it("enforces CPU timeouts", async () => {
     const output = createOutput();
 
@@ -181,6 +201,26 @@ describe.sequential("QuickJS sandbox integration", () => {
     );
 
     expect(output.stdout.join("")).toContain("sandbox 42 { ok: true }");
+    expect(output.stderr.join("")).toBe("");
+  });
+
+  it("supports Buffer.isBuffer", async () => {
+    const output = createOutput();
+
+    await runScript(
+      `
+        console.log(
+          Buffer.isBuffer(Buffer.from([1, 2, 3])),
+          Buffer.isBuffer(new Uint8Array(3)),
+          Buffer.isBuffer("nope")
+        );
+      `,
+      manager,
+      "default",
+      output.sink
+    );
+
+    expect(output.stdout.join("")).toContain("true false false");
     expect(output.stderr.join("")).toBe("");
   });
 });

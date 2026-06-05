@@ -301,6 +301,10 @@ export class QuickJSSandbox {
               super(value);
             }
 
+            static isBuffer(value) {
+              return value instanceof Buffer;
+            }
+
             static from(value, encodingOrOffset, length) {
               if (typeof value === "string") {
                 if (encodingOrOffset !== undefined && encodingOrOffset !== "base64") {
