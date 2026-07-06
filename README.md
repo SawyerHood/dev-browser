@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/sawyerhood-dev-browser-badge.png)](https://mseep.ai/app/sawyerhood-dev-browser)
+
 <p align="center">
   <img src="assets/header.png" alt="Dev Browser - Browser automation for Claude Code" width="100%">
 </p>
