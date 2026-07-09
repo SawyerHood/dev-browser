@@ -278,6 +278,29 @@ describe("BrowserManager auto-connect", () => {
     expect(relaunchedEntry.ignoreHTTPSErrors).toBe(true);
   });
 
+  it("closes a persistent context that returns after its request is aborted", async () => {
+    const controller = new AbortController();
+    const context = new MockContext();
+    const browser = new MockBrowser([context]);
+    context.setBrowser(browser);
+    const launchPersistentContext = vi.fn(async () => {
+      controller.abort(new Error("launch request disconnected"));
+      return context;
+    });
+    const { manager } = createManager({ launchPersistentContext });
+
+    await expect(
+      manager.ensureBrowser("late-launch", {
+        headless: true,
+        signal: controller.signal,
+      })
+    ).rejects.toThrow("launch request disconnected");
+
+    expect(context.closeCalls).toBe(1);
+    expect(browser.closeCalls).toBe(1);
+    expect(manager.getBrowser("late-launch")).toBeUndefined();
+  });
+
   it("parses DevToolsActivePort and returns the browser websocket endpoint", async () => {
     const homeDir = "/Users/tester";
     const devToolsPath = path.join(
@@ -495,6 +518,25 @@ describe("BrowserManager auto-connect", () => {
         type: "connected",
       },
     ]);
+  });
+
+  it("closes a CDP browser connection that returns after its request is aborted", async () => {
+    const controller = new AbortController();
+    const browser = new MockBrowser([new MockContext()]);
+    const connectOverCDP = vi.fn(async () => {
+      controller.abort(new Error("connect request disconnected"));
+      return browser;
+    });
+    const { manager } = createManager({ connectOverCDP });
+
+    await expect(
+      manager.connectBrowser("late-connect", "ws://127.0.0.1:9222/devtools/browser/late", {
+        signal: controller.signal,
+      })
+    ).rejects.toThrow("connect request disconnected");
+
+    expect(browser.closeCalls).toBe(1);
+    expect(manager.getBrowser("late-connect")).toBeUndefined();
   });
 
   it("getBrowser returns connected entries without relaunching them", async () => {

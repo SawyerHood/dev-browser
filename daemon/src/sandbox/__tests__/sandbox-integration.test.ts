@@ -188,6 +188,66 @@ describe.sequential("QuickJS sandbox integration", () => {
     ).rejects.toThrow(/timed out|terminated|interrupted/i);
   }, 120_000);
 
+  it("stops pending Playwright operations on abort before reusing the browser", async () => {
+    const controller = new AbortController();
+    let announceReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      announceReady = resolve;
+    });
+    const firstOutput = createOutput();
+    const onStdout = firstOutput.sink.onStdout;
+    firstOutput.sink.onStdout = (data) => {
+      onStdout(data);
+      if (data.includes("waiting")) announceReady();
+    };
+
+    const blocked = runScript(
+      `
+        const page = await browser.getPage("abort-reuse");
+        await page.setContent("<button id='ok'>Ready</button>");
+        console.log("waiting");
+        await page.locator("#never").click({ timeout: 60000 });
+        console.log("late");
+      `,
+      manager,
+      "default",
+      firstOutput.sink,
+      { signal: controller.signal, timeout: 60_000 }
+    );
+    const blockedOutcome = blocked.then(
+      () => null,
+      (error: unknown) => error
+    );
+
+    await ready;
+    const abortStarted = Date.now();
+    controller.abort(new Error("client disconnected"));
+    const blockedError = await Promise.race([
+      blockedOutcome,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("sandbox abort did not settle")), 2_000)
+      ),
+    ]);
+    expect(blockedError).toBeInstanceOf(Error);
+    expect((blockedError as Error).message).toContain("client disconnected");
+    expect(Date.now() - abortStarted).toBeLessThan(2_000);
+    expect(firstOutput.stdout.join("")).not.toContain("late");
+
+    const nextOutput = createOutput();
+    await runScript(
+      `
+        const page = await browser.getPage("abort-reuse");
+        await page.locator("#ok").click({ timeout: 5000 });
+        console.log(await page.locator("#ok").textContent());
+      `,
+      manager,
+      "default",
+      nextOutput.sink,
+      { timeout: 10_000 }
+    );
+    expect(nextOutput.stdout.join("")).toContain("Ready");
+  }, 30_000);
+
   it("routes console output to stdout", async () => {
     const output = createOutput();
 

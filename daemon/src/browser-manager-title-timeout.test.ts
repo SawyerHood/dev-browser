@@ -10,9 +10,10 @@ type BrowserManagerInternals = {
   getPageTargetId: (context: BrowserContext, page: Page) => Promise<string | null>;
 };
 
-function createMockEntry(page: Page): BrowserEntry {
+function createMockEntry(pages: Page | Page[]): BrowserEntry {
+  const pageList = Array.isArray(pages) ? pages : [pages];
   const context = {
-    pages: () => [page],
+    pages: () => pageList,
   } as unknown as BrowserContext;
 
   const browser = {
@@ -63,6 +64,49 @@ describe("BrowserManager listPages title handling", () => {
         title: "",
         url: "chrome://blank",
       },
+    ]);
+  });
+
+  it("starts every title lookup concurrently and uses one timeout window", async () => {
+    vi.useFakeTimers();
+
+    const started: number[] = [];
+    const pages = [0, 1, 2].map(
+      (index) =>
+        ({
+          isClosed: () => false,
+          on: () => undefined,
+          title: () => {
+            started.push(index);
+            return new Promise<string>(() => {});
+          },
+          url: () => `chrome://page-${index}`,
+        }) as unknown as Page
+    );
+
+    const manager = new BrowserManager("/tmp/dev-browser-concurrent-title-timeout");
+    const internals = manager as unknown as BrowserManagerInternals;
+    internals.browsers.set(browserName, createMockEntry(pages));
+    vi.spyOn(internals, "getPageTargetId").mockImplementation(async (_context, page) => {
+      return `target-${pages.indexOf(page)}`;
+    });
+
+    let settled = false;
+    const pagesPromise = manager.listPages(browserName).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(started).toEqual([0, 1, 2]);
+
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pagesPromise).resolves.toEqual([
+      { id: "target-0", name: null, title: "", url: "chrome://page-0" },
+      { id: "target-1", name: null, title: "", url: "chrome://page-1" },
+      { id: "target-2", name: null, title: "", url: "chrome://page-2" },
     ]);
   });
 

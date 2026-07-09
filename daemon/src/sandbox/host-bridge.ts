@@ -55,6 +55,21 @@ export class HostBridge {
     await this.dispatcherConnection.dispatch(JSON.parse(json) as Record<string, unknown>);
   }
 
+  async stopPendingOperations(error: Error): Promise<void> {
+    const dispatchers = this.dispatcherConnection._dispatcherByGuid;
+    if (!dispatchers) {
+      await this.rootDispatcher.stopPendingOperations(error);
+      return;
+    }
+
+    const controllers = new Set(
+      [...new Set(dispatchers.values())].flatMap((dispatcher) => [
+        ...(dispatcher._activeProgressControllers ?? []),
+      ])
+    );
+    await Promise.all([...controllers].map((controller) => controller.abort(error)));
+  }
+
   async dispose(): Promise<void> {
     if (this.disposed) {
       return;
@@ -63,10 +78,22 @@ export class HostBridge {
     this.disposed = true;
     this.dispatcherConnection.onmessage = () => {};
 
+    let cleanupError: unknown;
+    try {
+      await this.stopPendingOperations(new Error("Sandbox bridge disposed"));
+    } catch (error) {
+      cleanupError = error;
+    }
     try {
       await this.playwrightDispatcher?.cleanup();
+    } catch (error) {
+      cleanupError ??= error;
     } finally {
       this.rootDispatcher._dispose();
+    }
+
+    if (cleanupError) {
+      throw cleanupError;
     }
   }
 }

@@ -374,7 +374,7 @@ describe.sequential("QuickJS page.cua toolset", () => {
     }, 180_000);
 
     it("clicks at exact coordinates with the left button by default", async () => {
-      const result = await harness.runJson<{ clicks: RecordedClick[] }>(
+      const result = await harness.runJson<{ clicks: RecordedClick[]; elapsed: number }>(
         withCuaPage(
           "cua-click",
           `
@@ -426,16 +426,19 @@ describe.sequential("QuickJS page.cua toolset", () => {
     }, 15_000);
 
     it("doubleClick clicks twice at the same point", async () => {
-      const result = await harness.runJson<{ clicks: RecordedClick[] }>(
+      const result = await harness.runJson<{ clicks: RecordedClick[]; elapsed: number }>(
         withCuaPage(
           "cua-double-click",
           `
+          const start = Date.now();
           await page.cua.doubleClick({ x: 350, y: 250 });
-          console.log(JSON.stringify({ clicks: await page.evaluate(() => window.clicks) }));
+          const elapsed = Date.now() - start;
+          console.log(JSON.stringify({ elapsed, clicks: await page.evaluate(() => window.clicks) }));
         `
         )
       );
 
+      expect(result.elapsed).toBeLessThan(900);
       expect(result.clicks).toHaveLength(2);
       expect(result.clicks.map((click) => click.detail)).toEqual([1, 2]);
       for (const click of result.clicks) {
@@ -868,32 +871,14 @@ describe.sequential("QuickJS page.cua toolset", () => {
       await manager.stopBrowser(browserName);
     }, 180_000);
 
-    it("waits for click-triggered navigation by default", async () => {
+    it("does not pay the navigation grace delay by default", async () => {
       const firstUrl = `${navigationServer.baseUrl}/cua/first`;
-      const result = await harness.runJson<{ url: string; title: string }>(`
+      const result = await harness.runJson<{ elapsed: number; url: string }>(`
         const page = await browser.getPage("cua-nav-default");
         await page.goto(${JSON.stringify(firstUrl)}, { waitUntil: "load" });
         const box = await page.locator("#nav").boundingBox();
-        await page.cua.click({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
-        console.log(JSON.stringify({ url: page.url(), title: await page.title() }));
-      `);
-
-      expect(result.url).toBe(`${navigationServer.baseUrl}/cua/second`);
-      expect(result.title).toBe("Second Page");
-    }, 30_000);
-
-    it("skips the navigation wait with waitForNavigation: false", async () => {
-      const firstUrl = `${navigationServer.baseUrl}/cua/first`;
-      const result = await harness.runJson<{ elapsed: number; url: string }>(`
-        const page = await browser.getPage("cua-nav-escape");
-        await page.goto(${JSON.stringify(firstUrl)}, { waitUntil: "load" });
-        const box = await page.locator("#nav").boundingBox();
         const start = Date.now();
-        await page.cua.click({
-          x: box.x + box.width / 2,
-          y: box.y + box.height / 2,
-          waitForNavigation: false,
-        });
+        await page.cua.click({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
         const elapsed = Date.now() - start;
         await page.waitForURL("**/cua/second");
         console.log(JSON.stringify({ elapsed, url: page.url() }));
@@ -901,6 +886,24 @@ describe.sequential("QuickJS page.cua toolset", () => {
 
       expect(result.elapsed).toBeLessThan(900);
       expect(result.url).toBe(`${navigationServer.baseUrl}/cua/second`);
+    }, 30_000);
+
+    it("settles main-frame navigation when explicitly requested", async () => {
+      const firstUrl = `${navigationServer.baseUrl}/cua/first`;
+      const result = await harness.runJson<{ title: string; url: string }>(`
+        const page = await browser.getPage("cua-nav-explicit");
+        await page.goto(${JSON.stringify(firstUrl)}, { waitUntil: "load" });
+        const box = await page.locator("#nav").boundingBox();
+        await page.cua.click({
+          x: box.x + box.width / 2,
+          y: box.y + box.height / 2,
+          waitForNavigation: true,
+        });
+        console.log(JSON.stringify({ title: await page.title(), url: page.url() }));
+      `);
+
+      expect(result.url).toBe(`${navigationServer.baseUrl}/cua/second`);
+      expect(result.title).toBe("Second Page");
     }, 30_000);
 
     it("ignores child-frame navigations via the main-frame predicate", async () => {
@@ -914,7 +917,11 @@ describe.sequential("QuickJS page.cua toolset", () => {
         await page.goto(${JSON.stringify(hostUrl)}, { waitUntil: "load" });
         const box = await page.locator("#swap").boundingBox();
         const start = Date.now();
-        await page.cua.click({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+        await page.cua.click({
+          x: box.x + box.width / 2,
+          y: box.y + box.height / 2,
+          waitForNavigation: true,
+        });
         const elapsed = Date.now() - start;
         console.log(JSON.stringify({
           elapsed,

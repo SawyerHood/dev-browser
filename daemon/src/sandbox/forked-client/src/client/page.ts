@@ -917,6 +917,12 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     return this.mainFrame().locator(selector, options);
   }
 
+  getByRef(ref: string): Locator {
+    if (!/^(?:f\d+)?e\d+$/.test(ref))
+      throw new Error(`Invalid snapshot ref "${ref}" — expected e<number> or f<number>e<number>`);
+    return this.locator("aria-ref=" + ref);
+  }
+
   getByTestId(testId: string | RegExp): Locator {
     return this.mainFrame().getByTestId(testId);
   }

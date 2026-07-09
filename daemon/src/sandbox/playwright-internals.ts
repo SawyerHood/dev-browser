@@ -23,12 +23,19 @@ export interface ClientConnectionLike {
 }
 
 export interface DispatcherConnectionLike {
+  _dispatcherByGuid?: Map<string, RootDispatcherLike>;
   onmessage: (message: WireMessage) => void;
   dispatch(message: WireMessage): Promise<void>;
 }
 
 export interface RootDispatcherLike {
+  _activeProgressControllers?: Set<ProgressControllerLike>;
   _dispose(): void;
+  stopPendingOperations(error: Error): Promise<void>;
+}
+
+export interface ProgressControllerLike {
+  abort(error: Error): Promise<void>;
 }
 
 export interface PlaywrightDispatcherLike {

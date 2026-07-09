@@ -556,15 +556,19 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       const firstUrl = `${server.baseUrl}/dom/first`;
       const result = await harness.runJson<{
         clicks: Array<{ target: string; x: number; y: number }>;
+        elapsed: number;
       }>(`
         ${ID_HELPERS}
         const page = await browser.getPage("dom-cua-act-click");
         await page.goto(${JSON.stringify(firstUrl)}, { waitUntil: "load" });
         const snapshot = await page.domCua.getVisibleDom();
-        await page.domCua.click({ nodeId: idFor(snapshot, ">Two<"), waitForNavigation: false });
-        console.log(JSON.stringify({ clicks: await page.evaluate(() => window.clicks) }));
+        const start = Date.now();
+        await page.domCua.click({ nodeId: idFor(snapshot, ">Two<") });
+        const elapsed = Date.now() - start;
+        console.log(JSON.stringify({ elapsed, clicks: await page.evaluate(() => window.clicks) }));
       `);
 
+      expect(result.elapsed).toBeLessThan(900);
       expect(result.clicks).toEqual([{ target: "two", x: 80, y: 86 }]);
     }, 30_000);
 
@@ -609,15 +613,19 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       const firstUrl = `${server.baseUrl}/dom/first`;
       const result = await harness.runJson<{
         clicks: Array<{ target: string; x: number; y: number }>;
+        elapsed: number;
       }>(`
         ${ID_HELPERS}
         const page = await browser.getPage("dom-cua-act-double");
         await page.goto(${JSON.stringify(firstUrl)}, { waitUntil: "load" });
         const snapshot = await page.domCua.getVisibleDom();
+        const start = Date.now();
         await page.domCua.doubleClick({ nodeId: idFor(snapshot, ">One<") });
-        console.log(JSON.stringify({ clicks: await page.evaluate(() => window.clicks) }));
+        const elapsed = Date.now() - start;
+        console.log(JSON.stringify({ elapsed, clicks: await page.evaluate(() => window.clicks) }));
       `);
 
+      expect(result.elapsed).toBeLessThan(900);
       expect(result.clicks).toHaveLength(2);
       for (const click of result.clicks) {
         expect(click).toEqual({ target: "one", x: 80, y: 36 });

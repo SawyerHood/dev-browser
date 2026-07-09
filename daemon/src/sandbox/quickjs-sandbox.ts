@@ -179,10 +179,13 @@ interface QuickJSSandboxOptions {
 export class QuickJSSandbox {
   readonly #options: QuickJSSandboxOptions;
   readonly #anonymousPages = new Set<Page>();
+  readonly #abortWakeup: Promise<void>;
   readonly #pendingHostOperations = new Set<Promise<void>>();
   readonly #transportInbox: string[] = [];
 
   #asyncError?: Error;
+  #abortError?: Error;
+  #resolveAbortWakeup!: () => void;
   #host?: QuickJSHost;
   #hostBridge?: HostBridge;
   #flushPromise?: Promise<void>;
@@ -191,16 +194,21 @@ export class QuickJSSandbox {
 
   constructor(options: QuickJSSandboxOptions) {
     this.#options = options;
+    this.#abortWakeup = new Promise<void>((resolve) => {
+      this.#resolveAbortWakeup = resolve;
+    });
   }
 
   async initialize(): Promise<void> {
     this.#assertAlive();
+    this.#throwIfAborted();
     if (this.#initialized) {
       return;
     }
 
     try {
       await ensureDevBrowserTempDir();
+      this.#throwIfAborted();
 
       this.#host = await QuickJSHost.create({
         memoryLimitBytes: this.#options.memoryLimitBytes ?? DEFAULT_MEMORY_LIMIT_BYTES,
@@ -222,6 +230,7 @@ export class QuickJSSandbox {
           this.#handleTransportSend(message);
         },
       });
+      this.#throwIfAborted();
 
       this.#host.executeScriptSync(
         `
@@ -354,6 +363,7 @@ export class QuickJSSandbox {
       );
 
       const bundleCode = await getSandboxClientBundleCode();
+      this.#throwIfAborted();
       const bundleFactorySource = JSON.stringify(`${bundleCode}\nreturn __PlaywrightClient;`);
       this.#host.executeScriptSync(
         `
@@ -380,6 +390,7 @@ export class QuickJSSandbox {
         sharedBrowser: true,
         denyLaunch: true,
       });
+      this.#throwIfAborted();
 
       await this.#host.executeScript(
         `
@@ -531,8 +542,10 @@ export class QuickJSSandbox {
           filename: "sandbox-init.js",
         }
       );
+      this.#throwIfAborted();
 
       await this.#flushTransportQueue();
+      this.#throwIfAborted();
       this.#throwIfAsyncError();
       this.#initialized = true;
     } catch (error) {
@@ -543,6 +556,7 @@ export class QuickJSSandbox {
 
   async executeScript(script: string): Promise<void> {
     this.#assertInitialized();
+    this.#throwIfAborted();
     let executionError: unknown;
 
     try {
@@ -554,6 +568,7 @@ export class QuickJSSandbox {
           filename: "user-script.js",
         }
       );
+      this.#throwIfAborted();
 
       await this.#flushTransportQueue();
       this.#throwIfAsyncError();
@@ -577,6 +592,12 @@ export class QuickJSSandbox {
       return;
     }
 
+    try {
+      await this.stopPendingOperations(new Error("QuickJS sandbox disposed"));
+    } catch {
+      // Best effort cleanup during sandbox teardown.
+    }
+
     this.#disposed = true;
 
     await this.#cleanupAnonymousPages({
@@ -596,6 +617,18 @@ export class QuickJSSandbox {
       this.#host = undefined;
       this.#flushPromise = undefined;
     }
+  }
+
+  async abort(error: Error): Promise<void> {
+    if (!this.#abortError) {
+      this.#abortError = error;
+      this.#resolveAbortWakeup();
+    }
+    await this.stopPendingOperations(this.#abortError);
+  }
+
+  async stopPendingOperations(error: Error): Promise<void> {
+    await this.#hostBridge?.stopPendingOperations(error);
   }
 
   #routeConsole(level: QuickJSConsoleLevel, args: unknown[]): void {
@@ -627,17 +660,21 @@ export class QuickJSSandbox {
   }
 
   async #drainAsyncOps(): Promise<void> {
+    this.#throwIfAborted();
     this.#throwIfAsyncError();
     await this.#flushTransportQueue();
+    this.#throwIfAborted();
     this.#throwIfAsyncError();
 
     if (this.#pendingHostOperations.size === 0) {
       return;
     }
 
-    await Promise.race(this.#pendingHostOperations);
+    await Promise.race([Promise.race(this.#pendingHostOperations), this.#abortWakeup]);
+    this.#throwIfAborted();
     this.#throwIfAsyncError();
     await this.#flushTransportQueue();
+    this.#throwIfAborted();
     this.#throwIfAsyncError();
   }
 
@@ -737,6 +774,12 @@ export class QuickJSSandbox {
   #throwIfAsyncError(): void {
     if (this.#asyncError) {
       throw this.#asyncError;
+    }
+  }
+
+  #throwIfAborted(): void {
+    if (this.#abortError) {
+      throw this.#abortError;
     }
   }
 
