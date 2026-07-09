@@ -1,6 +1,6 @@
 LLM USAGE GUIDE:
-  Write small, focused scripts. Each script should do ONE thing: navigate, click, fill, or check.
-  End each script by logging the state you need for the next decision.
+  Make each script one decision-sized step. Batch tightly coupled inspect/act/verify work when the target is already known.
+  End each script by logging only the state needed for the next decision.
   Use descriptive page names like "login", "checkout", or "results" instead of "page1".
   Named pages from browser.getPage("name") persist between script runs, so you usually do not need to re-navigate.
   Inside page.evaluate(...), write plain JavaScript only - no TypeScript syntax in the browser context.
@@ -27,20 +27,20 @@ LLM USAGE GUIDE:
   AI snapshots for element discovery:
     dev-browser <<'EOF'
     const page = await browser.getPage("main");
-    const result = await page.snapshotForAI();
+    const result = await page.snapshotForAI({ track: "main", timeout: 5000 });
     console.log(result.full);
     // Returns { full: string, incremental?: string }.
     // Optional args: { track?: string, depth?: number, timeout?: number }.
-    // Read result.full to identify the right element.
-    // Then interact with it using Playwright:
-    // await page.getByRole("button", { name: "Continue" }).click();
-    // Re-run page.snapshotForAI({ track: "main" }) after the page changes.
+    // Read result.full and copy the target's ref, such as e12 or f2e5.
+    // In the next decision-sized script:
+    // await page.getByRef("e12").click({ timeout: 5000 });
+    // console.log((await page.snapshotForAI({ track: "main", timeout: 5000 })).incremental);
     EOF
 
   Choosing your approach:
-    Unknown pages: use page.snapshotForAI() first to discover the page, then interact based on what you find.
-    Known pages/selectors: skip the snapshot and use direct Playwright selectors like page.click(), page.fill(), or page.locator() for faster, more reliable automation.
-    Prefer locators/snapshotForAI first; switch to page.domCua node ids when a unique stable locator can't be built or after 2 failed locator attempts on the same target; switch to page.cua coordinates when the visual structure is clearer than the DOM.
+    Unknown pages: snapshotForAI({ track, timeout: 5000 }), act with getByRef(ref), then take a tracked snapshot to verify the change.
+    Known pages/selectors: skip the snapshot and use direct Playwright selectors with short explicit action timeouts. Use getByRole(...) as a semantic fallback when no stable direct selector is known.
+    Switch to page.domCua node ids when a stable locator cannot be built; use page.cua coordinates when visual structure is clearer than the DOM.
     After acting, collect the cheapest state check; don't take both a snapshot and a screenshot by default.
 
   Vision workflow (page.cua):
@@ -64,8 +64,13 @@ LLM USAGE GUIDE:
     Also available: cua.doubleClick({x, y}), cua.drag({path: [{x, y}, ...]}), cua.move({x, y}),
     cua.scroll({x, y, scrollX, scrollY}) (positive scrollY scrolls content down),
     cua.keypress({keys: ["ctrl", "a"]}), cua.type({text}).
-    cua.click and domCua.click wait ~1s for a click-triggered navigation (then up to 10s for the load);
-    pass waitForNavigation: false to skip that grace wait in tight loops.
+    cua.click, cua.doubleClick, domCua.click, and domCua.doubleClick do not wait for navigation by default.
+    For a known destination, pair the action with page.waitForURL(...):
+      await Promise.all([
+        page.waitForURL("**/confirmation", { timeout: 5000 }),
+        page.cua.click({ x: 412, y: 233 }),
+      ]);
+    For an unknown click destination, pass waitForNavigation: true to settle a main-frame navigation.
 
   DOM-id workflow (page.domCua):
     Snapshot the visible interactive elements, then act on them by node id.
@@ -100,8 +105,8 @@ LLM USAGE GUIDE:
   Waiting patterns:
     dev-browser <<'EOF'
     const page = await browser.getPage("search-results");
-    await page.waitForSelector(".results");
-    await page.waitForURL("**/success");
+    await page.waitForSelector(".results", { timeout: 5000 });
+    await page.waitForURL("**/success", { timeout: 5000 });
     console.log(JSON.stringify({
       url: page.url(),
       title: await page.title(),
@@ -134,6 +139,7 @@ LLM USAGE GUIDE:
     page.url()                             Get the current URL
     page.snapshotForAI(options)            Get an AI-optimized snapshot; returns { full, incremental? }
                                            Options: { track?: string, depth?: number, timeout?: number }
+    page.getByRef(ref)                     Target an eN or iframe fNeN ref from snapshotForAI()
     page.getByRole(role, { name })         Target elements discovered from the snapshot
     page.textContent(selector)             Get the text content of an element
     page.innerHTML(selector)               Get the inner HTML of an element
@@ -146,9 +152,11 @@ LLM USAGE GUIDE:
     page.screenshot()                      Capture a screenshot buffer; save it with saveScreenshot(...)
     page.cua.screenshot(options)           Save a JPEG for the vision workflow; returns { path, width, height }
                                            Options: { name?: string, fullPage?: boolean, clip? }
-    page.cua.click({ x, y })               Click at viewport coordinates measured on a cua screenshot
+    page.cua.click({ x, y, waitForNavigation? })
+                                           Click at viewport coordinates; navigation wait defaults false
     page.domCua.getVisibleDom()            Snapshot visible interactive elements as node_id=N lines
-    page.domCua.click({ nodeId })          Click an element by node id from the latest snapshot
+    page.domCua.click({ nodeId, waitForNavigation? })
+                                           Click a current node id; navigation wait defaults false
     page.$$eval(selector, fn)              Run a function on all matching elements
     page.$eval(selector, fn)               Run a function on the first matching element
     page.evaluate(fn)                      Run JavaScript in the page context (plain JS only)

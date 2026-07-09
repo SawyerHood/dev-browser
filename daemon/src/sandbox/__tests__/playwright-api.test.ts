@@ -739,6 +739,70 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
       expect(result.full).toContain('heading "Hello World"');
       expect(result.full).toContain('button "Submit"');
     });
+
+    it("uses refs from snapshotForAI() as injection-safe locators", async () => {
+      const result = await harness.runJson<{
+        clicked: string;
+        invalidRefError: string;
+        ref: string;
+      }>(
+        withTestPage(
+          "snapshot-ref",
+          `
+          const snapshot = await page.snapshotForAI({ timeout: 5000 });
+          const submitLine = snapshot.full
+            .split("\\n")
+            .find((line) => line.includes('button "Submit"'));
+          const ref = submitLine?.match(/ref=((?:f\\d+)?e\\d+)/)?.[1];
+          if (!ref) throw new Error("Submit snapshot ref not found");
+
+          await page.getByRef(ref).click({ timeout: 5000 });
+
+          let invalidRefError = "";
+          try {
+            page.getByRef('e1 >> button');
+          } catch (error) {
+            invalidRefError = error.message;
+          }
+
+          console.log(JSON.stringify({
+            clicked: await page.locator("#result").textContent(),
+            invalidRefError,
+            ref,
+          }));
+        `
+        )
+      );
+
+      expect(result.ref).toMatch(/^(?:f\d+)?e\d+$/);
+      expect(result.clicked).toBe("clicked::red");
+      expect(result.invalidRefError).toContain("Invalid snapshot ref");
+    });
+
+    it("uses iframe refs from snapshotForAI()", async () => {
+      const result = await harness.runJson<{ clicked: string; ref: string }>(`
+        const page = await browser.getPage("snapshot-iframe-ref");
+        await page.setContent(
+          '<iframe srcdoc="<button id=inside onclick=&quot;this.dataset.clicked=1&quot;>Inside</button>"></iframe>',
+          { waitUntil: "load" },
+        );
+        const snapshot = await page.snapshotForAI({ timeout: 5000 });
+        const insideLine = snapshot.full
+          .split("\\n")
+          .find((line) => line.includes('button "Inside"'));
+        const ref = insideLine?.match(/ref=(f\\d+e\\d+)/)?.[1];
+        if (!ref) throw new Error("Iframe snapshot ref not found");
+        await page.getByRef(ref).click({ timeout: 5000 });
+        const child = page.frames().find((frame) => frame !== page.mainFrame());
+        console.log(JSON.stringify({
+          clicked: await child.locator("#inside").getAttribute("data-clicked"),
+          ref,
+        }));
+      `);
+
+      expect(result.ref).toMatch(/^f\d+e\d+$/);
+      expect(result.clicked).toBe("1");
+    });
   });
 
   describe.sequential("screenshots and input devices", () => {

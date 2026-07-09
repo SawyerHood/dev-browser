@@ -109,7 +109,7 @@ export class DomCua {
     nodeId,
     button = "left",
     modifiers = [],
-    waitForNavigation = true,
+    waitForNavigation = false,
   }: {
     nodeId: number | string;
     button?: "left" | "middle" | "right";
@@ -120,9 +120,15 @@ export class DomCua {
     await this.#page.cua.click({ x, y, button, modifiers, waitForNavigation });
   }
 
-  async doubleClick({ nodeId }: { nodeId: number | string }): Promise<void> {
+  async doubleClick({
+    nodeId,
+    waitForNavigation = false,
+  }: {
+    nodeId: number | string;
+    waitForNavigation?: boolean;
+  }): Promise<void> {
     const { x, y } = await this.#resolveNodeCenter(nodeId);
-    await this.#page.cua.click({ x, y, clickCount: 2 });
+    await this.#page.cua.click({ x, y, clickCount: 2, waitForNavigation });
   }
 
   async scroll({

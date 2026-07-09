@@ -80,7 +80,17 @@ Windows npm installs download the native `dev-browser-windows-x64.exe` release a
 
 ### Using with AI agents
 
-After installing, just tell your agent to run `dev-browser --help` — the help output includes a full LLM usage guide with examples and API reference. No plugin or skill installation needed.
+After installing, tell your agent to run `dev-browser --help` — the help output includes the current LLM usage guide and API reference.
+
+For agents that discover local skills, install or refresh the embedded skill explicitly:
+
+```bash
+dev-browser install-skill --codex   # ~/.codex/skills/dev-browser/SKILL.md
+dev-browser install-skill --claude  # ~/.claude/skills/dev-browser/SKILL.md
+dev-browser install-skill --agents  # ~/.agents/skills/dev-browser/SKILL.md
+```
+
+Flags may be combined. With an interactive terminal, `dev-browser install-skill` prompts for targets. In non-interactive environments it updates all three locations, including Codex, so an older copied skill does not survive a CLI upgrade.
 
 <details>
 <summary>Allowing dev-browser in Claude Code without permission prompts</summary>
@@ -131,7 +141,7 @@ You can also allow related commands in the same list:
 </details>
 
 <details>
-<summary>Legacy plugin installation (Claude Code / Amp / Codex)</summary>
+<summary>Legacy Claude Code plugin installation</summary>
 
 ### Claude Code
 
@@ -141,20 +151,6 @@ You can also allow related commands in the same list:
 ```
 
 Restart Claude Code after installation.
-
-### Amp / Codex
-
-Copy the skill to your skills directory:
-
-```bash
-# For Amp: ~/.claude/skills | For Codex: ~/.codex/skills
-SKILLS_DIR=~/.claude/skills  # or ~/.codex/skills
-
-mkdir -p $SKILLS_DIR
-git clone https://github.com/sawyerhood/dev-browser /tmp/dev-browser-skill
-cp -r /tmp/dev-browser-skill/skills/dev-browser $SKILLS_DIR/dev-browser
-rm -rf /tmp/dev-browser-skill
-```
 
 </details>
 

@@ -3,6 +3,7 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { BrowserManager } from "./browser-manager.js";
+import { executeRequest } from "./execute-request.js";
 import { formatError } from "./format-error.js";
 import { createKeyedLock, createMutex } from "./lock.js";
 import {
@@ -131,62 +132,46 @@ function createMessageQueue(socket: net.Socket) {
 }
 
 async function handleExecute(socket: net.Socket, request: ExecuteRequest): Promise<void> {
-  await withBrowserLock(request.browser, async () => {
-    if (request.connect === "auto") {
-      await manager.autoConnect(request.browser);
-    } else if (request.connect) {
-      await manager.connectBrowser(request.browser, request.connect);
-    } else {
-      await manager.ensureBrowser(request.browser, {
-        headless: request.headless,
-        ignoreHTTPSErrors: request.ignoreHTTPSErrors,
-      });
-    }
-
-    const output = createMessageQueue(socket);
-    const timeoutMs = request.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS;
-
-    try {
-      await runScript(
-        request.script,
-        manager,
-        request.browser,
-        {
-          onStdout: (data) => {
-            void output.push({
-              id: request.id,
-              type: "stdout",
-              data,
-            });
-          },
-          onStderr: (data) => {
-            void output.push({
-              id: request.id,
-              type: "stderr",
-              data,
-            });
-          },
-        },
-        {
-          timeout: timeoutMs,
+  await executeRequest(
+    request,
+    request.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS,
+    {
+      isOpen: () => !socket.destroyed && socket.writable && !socket.writableEnded,
+      onDisconnect: (listener) => {
+        const onDisconnect = () => listener();
+        socket.once("close", onDisconnect);
+        socket.once("error", onDisconnect);
+        return () => {
+          socket.off("close", onDisconnect);
+          socket.off("error", onDisconnect);
+        };
+      },
+      send: (message) => writeMessage(socket, message),
+    },
+    {
+      withBrowserLock,
+      prepareBrowser: async (currentRequest, context) => {
+        const operation = { deadline: context.deadline, signal: context.signal };
+        if (currentRequest.connect === "auto") {
+          await manager.autoConnect(currentRequest.browser, operation);
+        } else if (currentRequest.connect) {
+          await manager.connectBrowser(currentRequest.browser, currentRequest.connect, operation);
+        } else {
+          await manager.ensureBrowser(currentRequest.browser, {
+            headless: currentRequest.headless,
+            ignoreHTTPSErrors: currentRequest.ignoreHTTPSErrors,
+            ...operation,
+          });
         }
-      );
-
-      await output.drain();
-      await writeMessage(socket, {
-        id: request.id,
-        type: "complete",
-        success: true,
-      });
-    } catch (error) {
-      await output.drain().catch(() => undefined);
-      await writeMessage(socket, {
-        id: request.id,
-        type: "error",
-        message: formatError(error),
-      });
+      },
+      runScript: async (currentRequest, output, context) => {
+        await runScript(currentRequest.script, manager, currentRequest.browser, output, {
+          signal: context.signal,
+          timeout: Math.max(1, context.deadline - Date.now()),
+        });
+      },
     }
-  });
+  );
 }
 
 async function handleInstall(socket: net.Socket, request: { id: string }): Promise<void> {

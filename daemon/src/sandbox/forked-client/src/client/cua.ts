@@ -38,18 +38,14 @@ export class Cua {
     this.#page = page;
   }
 
-  /**
-   * Click at viewport coordinates. By default waits for a click-triggered
-   * navigation (a ~1s grace period is paid on every non-navigating click);
-   * pass `waitForNavigation: false` to skip the wait in tight loops.
-   */
+  /** Click at viewport coordinates. Opt into navigation settling when needed. */
   async click({
     x,
     y,
     button = "left",
     clickCount = 1,
     modifiers = [],
-    waitForNavigation = true,
+    waitForNavigation = false,
   }: {
     x: number;
     y: number;
@@ -69,12 +65,14 @@ export class Cua {
     x,
     y,
     modifiers = [],
+    waitForNavigation = false,
   }: {
     x: number;
     y: number;
     modifiers?: string[];
+    waitForNavigation?: boolean;
   }): Promise<void> {
-    await this.click({ x, y, clickCount: 2, modifiers });
+    await this.click({ x, y, clickCount: 2, modifiers, waitForNavigation });
   }
 
   async drag({
