@@ -1,5 +1,6 @@
 mod connection;
 mod daemon;
+mod doctor;
 mod skill;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -8,6 +9,7 @@ use daemon::{
     current_daemon_pid, ensure_daemon, install_daemon_runtime, is_daemon_running,
     wait_for_daemon_exit,
 };
+use doctor::{run_doctor, DoctorOptions, DEFAULT_MIN_AGE_DAYS, DEFAULT_STALE_DAYS};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use skill::install_skill;
@@ -51,6 +53,9 @@ Structured / agent-facing surfaces:
   dev-browser browsers --json        Managed browser list as JSON instead of a table.
   dev-browser --version / -V         Print the installed CLI version and exit.
   dev-browser stop --browser <NAME>  Stop one named browser instead of the whole daemon.
+  dev-browser doctor                 Diagnose ~/.dev-browser disk usage (daemon status,
+                                      tmp/ and browsers/ size, stale profiles). Add --gc
+                                      to plan cleanup (dry run) or --gc --yes to execute it.
 
 Primary invocation styles:
   dev-browser <<'EOF'
@@ -255,6 +260,47 @@ enum Command {
         long_about = "Print the full agent usage guide in-tool, with no need to scroll past --help.\n\nThis is the same content shown after `dev-browser --help`, but `-h` and truncated `--help` output (e.g. piped through `head`) don't reliably surface it. `robot-docs` always prints the whole guide to stdout regardless of terminal size or truncation."
     )]
     RobotDocs,
+    #[command(
+        about = "Diagnose ~/.dev-browser disk usage and (opt-in) garbage-collect stale data",
+        long_about = "Diagnose the on-disk state under ~/.dev-browser/: daemon status, disk usage for tmp/, browsers/, and logs/, and any named browser profiles that look stale.\n\nWith --gc, also compute a garbage-collection plan for tmp/ entries (and, with --include-browser-profiles, stale named browser profiles). The plan is printed as a DRY RUN by default -- nothing is deleted. Pass --yes together with --gc to actually delete the planned items.\n\nEvery delete is re-checked to be inside ~/.dev-browser immediately before it runs; nothing outside that directory is ever touched."
+    )]
+    Doctor {
+        #[arg(
+            long,
+            help = "Emit machine-readable JSON instead of a human-readable report"
+        )]
+        json: bool,
+        #[arg(
+            long,
+            help = "Compute a garbage-collection plan (dry run unless --yes is also passed)",
+            long_help = "Compute a garbage-collection plan for stale data under ~/.dev-browser/.\n\nWithout --yes, this only prints what WOULD be deleted (a dry run) -- nothing is touched. Add --yes to actually delete. Add --include-browser-profiles to also consider stale named browser profiles (off by default, since those can hold logged-in session state)."
+        )]
+        gc: bool,
+        #[arg(
+            long,
+            help = "Actually delete the GC plan's candidates (requires --gc; otherwise a no-op)",
+            long_help = "Actually delete the items in the --gc plan instead of only printing them.\n\nHas no effect without --gc. Every path is re-verified to be inside ~/.dev-browser immediately before deletion."
+        )]
+        yes: bool,
+        #[arg(
+            long,
+            help = "Also consider stale named browser profiles for GC (requires --gc)",
+            long_help = "Include stale named browser profiles (older than --stale-days) in the --gc plan.\n\nOff by default: deleting a browser profile discards any logged-in session state stored in it, which is more destructive than clearing tmp/ scratch files. Has no effect without --gc."
+        )]
+        include_browser_profiles: bool,
+        #[arg(
+            long,
+            value_name = "DAYS",
+            help = "Days of inactivity before a browser profile is flagged/GC'd as stale (default 30)"
+        )]
+        stale_days: Option<u64>,
+        #[arg(
+            long,
+            value_name = "DAYS",
+            help = "Minimum age in days before a tmp/ entry is GC-eligible (default 1)"
+        )]
+        min_age_days: Option<u64>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -387,6 +433,7 @@ fn classify_error_exit_code(error: &(dyn Error + 'static)) -> i32 {
 
 fn run() -> Result<i32, Box<dyn Error>> {
     let cli = Cli::parse();
+    warn_if_browser_flag_ignored(&cli);
 
     match &cli.command {
         Some(Command::Run { file }) => {
@@ -483,6 +530,21 @@ fn run() -> Result<i32, Box<dyn Error>> {
             print!("{CLI_AFTER_LONG_HELP}");
             Ok(0)
         }
+        Some(Command::Doctor {
+            json,
+            gc,
+            yes,
+            include_browser_profiles,
+            stale_days,
+            min_age_days,
+        }) => run_doctor(DoctorOptions {
+            json: *json,
+            gc: *gc,
+            confirm: *yes,
+            include_browser_profiles: *include_browser_profiles,
+            stale_days: stale_days.unwrap_or(DEFAULT_STALE_DAYS),
+            min_age_days: min_age_days.unwrap_or(DEFAULT_MIN_AGE_DAYS),
+        }),
         None => {
             if stdin_is_tty() {
                 let mut command = Cli::command();
@@ -507,7 +569,54 @@ fn known_subcommand_names() -> &'static [&'static str] {
         "stop",
         "capabilities",
         "robot-docs",
+        "doctor",
     ]
+}
+
+/// Must match the top-level `browser` field's `default_value = "default"`.
+/// Kept as a separate named constant (rather than re-deriving from clap)
+/// so the ignored-flag check below stays simple; a test pins the two in
+/// sync (`browser_flag_default_name_matches_clap_default`).
+const DEFAULT_BROWSER_NAME: &str = "default";
+
+/// `--browser <NAME>` is a top-level flag but only affects script execution
+/// (`run` / stdin) and `stop --browser <NAME>` (which has its own
+/// subcommand-level `--browser`, wired directly to the daemon's
+/// per-instance stop). For `status`, `browsers`, and a bare `stop` (no
+/// subcommand-level `--browser`), the top-level flag has no effect -- those
+/// either report on every managed browser, or (for `stop`) intentionally
+/// target the whole daemon. Returns the hint to print, or `None` if the
+/// flag is at its default or the command actually honors it.
+fn browser_flag_ignored_hint(cli: &Cli) -> Option<&'static str> {
+    if cli.browser == DEFAULT_BROWSER_NAME {
+        return None;
+    }
+
+    match &cli.command {
+        Some(Command::Browsers { .. }) => Some(
+            "`browsers` always lists every managed browser; there is no per-browser filter yet.",
+        ),
+        Some(Command::Status { .. }) => Some(
+            "`status` always reports on the whole daemon; there is no per-browser filter yet.",
+        ),
+        Some(Command::Stop { browser: None }) => Some(
+            "`stop` with no subcommand-level flag stops the whole daemon. Use `stop --browser <NAME>` (not the top-level --browser) to target one instance.",
+        ),
+        _ => None,
+    }
+}
+
+/// Prints a stderr warning when a non-default top-level `--browser` was
+/// passed to a subcommand that silently ignores it (P3-3). Rather than
+/// letting an agent assume `--browser <name> status` filtered the output,
+/// name the mismatch and point at the actual mechanism.
+fn warn_if_browser_flag_ignored(cli: &Cli) {
+    if let Some(hint) = browser_flag_ignored_hint(cli) {
+        eprintln!(
+            "Warning: top-level --browser '{}' has no effect here. {hint}",
+            cli.browser
+        );
+    }
 }
 
 /// Validates `--connect`'s optional value. `--connect` uses `num_args = 0..=1`
@@ -546,12 +655,21 @@ fn capabilities_document() -> Value {
             { "name": "stop", "about": "Stop the daemon and all browsers, or one named browser with --browser <NAME>" },
             { "name": "capabilities", "about": "Print this machine-readable capabilities document", "json_flag": true },
             { "name": "robot-docs", "about": "Print the full agent usage guide to stdout" },
+            { "name": "doctor", "about": "Diagnose ~/.dev-browser disk usage and (opt-in, dry-run-by-default) garbage-collect stale tmp/ and browser-profile data", "json_flag": true },
         ],
         "exit_codes": exit_codes,
         "env_vars": [
             {
                 "name": "DEV_BROWSER_DAEMON",
                 "description": "Override the daemon entrypoint (.js/.mjs/.cjs/.ts file, or a native executable) instead of the CLI's embedded daemon bundle."
+            },
+            {
+                "name": "PW_CHROMIUM_ATTACH_TO_OTHER",
+                "description": "Playwright/Chromium env var read by the embedded daemon. Defaulted to \"1\" automatically when unset, so `--connect` (CDP attach) to Chrome's built-in remote debugging doesn't hang. Set it to \"0\" explicitly before launching dev-browser to restore Playwright's non-attaching default."
+            },
+            {
+                "name": "USERNAME / USER",
+                "description": "(Windows only) Read to derive a per-user named-pipe identity for the daemon's control socket, so different Windows users on the same machine get separate daemons. Not meant to be set by agents to change behavior; falls back to the home-directory folder name if neither is set."
             }
         ],
         "flags": {
@@ -1018,5 +1136,151 @@ mod tests {
     fn classify_error_exit_code_defaults_to_generic() {
         let error: Box<dyn Error> = "boom".into();
         assert_eq!(classify_error_exit_code(&*error), ExitCode::GenericError.code());
+    }
+
+    // --- P3-3: --browser silently ignored by status/browsers/stop --------
+
+    #[test]
+    fn browser_flag_default_name_matches_clap_default() {
+        // Pins DEFAULT_BROWSER_NAME against the actual clap default so the
+        // two can never silently drift apart.
+        let cli = Cli::try_parse_from(["dev-browser", "status"]).unwrap();
+        assert_eq!(cli.browser, DEFAULT_BROWSER_NAME);
+    }
+
+    #[test]
+    fn browser_flag_ignored_hint_warns_for_status_with_non_default_browser() {
+        let cli = Cli::try_parse_from(["dev-browser", "--browser", "myproj", "status"]).unwrap();
+        assert!(browser_flag_ignored_hint(&cli).is_some());
+    }
+
+    #[test]
+    fn browser_flag_ignored_hint_warns_for_browsers_with_non_default_browser() {
+        let cli = Cli::try_parse_from(["dev-browser", "--browser", "myproj", "browsers"]).unwrap();
+        assert!(browser_flag_ignored_hint(&cli).is_some());
+    }
+
+    #[test]
+    fn browser_flag_ignored_hint_warns_for_bare_stop_with_non_default_browser() {
+        let cli = Cli::try_parse_from(["dev-browser", "--browser", "myproj", "stop"]).unwrap();
+        assert!(browser_flag_ignored_hint(&cli).is_some());
+    }
+
+    #[test]
+    fn browser_flag_ignored_hint_silent_for_stop_with_subcommand_browser_flag() {
+        let cli = Cli::try_parse_from([
+            "dev-browser",
+            "--browser",
+            "myproj",
+            "stop",
+            "--browser",
+            "myproj",
+        ])
+        .unwrap();
+        assert!(browser_flag_ignored_hint(&cli).is_none());
+    }
+
+    #[test]
+    fn browser_flag_ignored_hint_silent_when_browser_flag_left_at_default() {
+        let cli = Cli::try_parse_from(["dev-browser", "status"]).unwrap();
+        assert!(browser_flag_ignored_hint(&cli).is_none());
+    }
+
+    #[test]
+    fn browser_flag_ignored_hint_silent_for_run_command() {
+        let cli =
+            Cli::try_parse_from(["dev-browser", "--browser", "myproj", "run", "script.js"])
+                .unwrap();
+        assert!(browser_flag_ignored_hint(&cli).is_none());
+    }
+
+    // --- P3-8: env vars documented in capabilities --------------------------
+
+    #[test]
+    fn capabilities_document_lists_pw_chromium_attach_to_other_env_var() {
+        let document = capabilities_document();
+        let env_vars: Vec<&str> = document["env_vars"]
+            .as_array()
+            .expect("env_vars should be an array")
+            .iter()
+            .map(|entry| entry["name"].as_str().expect("env var name"))
+            .collect();
+        assert!(env_vars.contains(&"PW_CHROMIUM_ATTACH_TO_OTHER"));
+        assert!(env_vars.contains(&"USERNAME / USER"));
+        assert!(env_vars.contains(&"DEV_BROWSER_DAEMON"));
+    }
+
+    // --- P3-6: doctor subcommand ---------------------------------------------
+
+    #[test]
+    fn doctor_subcommand_parses_with_defaults() {
+        let cli = Cli::try_parse_from(["dev-browser", "doctor"]).unwrap();
+        match cli.command {
+            Some(Command::Doctor {
+                json,
+                gc,
+                yes,
+                include_browser_profiles,
+                stale_days,
+                min_age_days,
+            }) => {
+                assert!(!json);
+                assert!(!gc);
+                assert!(!yes);
+                assert!(!include_browser_profiles);
+                assert_eq!(stale_days, None);
+                assert_eq!(min_age_days, None);
+            }
+            _ => panic!("expected Doctor command"),
+        }
+    }
+
+    #[test]
+    fn doctor_subcommand_parses_all_flags() {
+        let cli = Cli::try_parse_from([
+            "dev-browser",
+            "doctor",
+            "--json",
+            "--gc",
+            "--yes",
+            "--include-browser-profiles",
+            "--stale-days",
+            "10",
+            "--min-age-days",
+            "2",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Doctor {
+                json,
+                gc,
+                yes,
+                include_browser_profiles,
+                stale_days,
+                min_age_days,
+            }) => {
+                assert!(json);
+                assert!(gc);
+                assert!(yes);
+                assert!(include_browser_profiles);
+                assert_eq!(stale_days, Some(10));
+                assert_eq!(min_age_days, Some(2));
+            }
+            _ => panic!("expected Doctor command"),
+        }
+    }
+
+    #[test]
+    fn doctor_is_a_known_subcommand_name_for_connect_swallow_guard() {
+        assert!(known_subcommand_names().contains(&"doctor"));
+    }
+
+    #[test]
+    fn connect_rejects_doctor_subcommand_name_as_url() {
+        let result = Cli::try_parse_from(["dev-browser", "--connect", "doctor"]);
+        let err = result
+            .err()
+            .expect("`--connect doctor` should be rejected");
+        assert!(err.to_string().contains("looks like a dev-browser subcommand"));
     }
 }

@@ -342,7 +342,7 @@ fn open_daemon_log_file() -> io::Result<fs::File> {
         .open(&log_path)
 }
 
-fn daemon_logs_dir() -> io::Result<PathBuf> {
+pub(crate) fn daemon_logs_dir() -> io::Result<PathBuf> {
     dirs::home_dir()
         .map(|path| path.join(DEV_BROWSER_DIR).join("logs"))
         .ok_or_else(|| {
@@ -351,6 +351,21 @@ fn daemon_logs_dir() -> io::Result<PathBuf> {
                 "Could not determine the home directory for daemon logs.",
             )
         })
+}
+
+/// Path to `~/.dev-browser/tmp/` — the sandbox script API's scratch
+/// directory (`saveScreenshot`/`writeFile`/`readFile`, documented in
+/// `CLI_LONG_ABOUT`). Exposed for `doctor`'s disk-usage report and GC plan.
+pub(crate) fn tmp_dir() -> Result<PathBuf, Box<dyn Error>> {
+    Ok(daemon_base_dir()?.join("tmp"))
+}
+
+/// Path to `~/.dev-browser/browsers/` — per-name Chromium profile storage
+/// (`browsers/<name>/chromium-profile`, matching `browser-manager.ts`'s
+/// default `baseDir`). Exposed for `doctor`'s disk-usage report, stale
+/// profile listing, and (opt-in) GC plan.
+pub(crate) fn browsers_dir() -> Result<PathBuf, Box<dyn Error>> {
+    Ok(daemon_base_dir()?.join("browsers"))
 }
 
 /// Path to the daemon's stdout/stderr log file. Referenced from the
@@ -446,7 +461,7 @@ fn find_tsx_cli(entry: &Path) -> Result<PathBuf, Box<dyn Error>> {
     )
 }
 
-fn daemon_base_dir() -> Result<PathBuf, Box<dyn Error>> {
+pub(crate) fn daemon_base_dir() -> Result<PathBuf, Box<dyn Error>> {
     dirs::home_dir()
         .map(|path| path.join(DEV_BROWSER_DIR))
         .ok_or_else(|| {
@@ -640,5 +655,21 @@ mod tests {
     fn tool_environment_error_displays_its_message() {
         let error = ToolEnvironmentError("boom".to_string());
         assert_eq!(error.to_string(), "boom");
+    }
+
+    // --- P3-6: doctor's path helpers ---------------------------------------
+
+    #[test]
+    fn tmp_dir_is_under_base_dir() {
+        let base = daemon_base_dir().expect("home dir should resolve in tests");
+        let tmp = tmp_dir().expect("tmp dir should resolve");
+        assert_eq!(tmp, base.join("tmp"));
+    }
+
+    #[test]
+    fn browsers_dir_is_under_base_dir() {
+        let base = daemon_base_dir().expect("home dir should resolve in tests");
+        let browsers = browsers_dir().expect("browsers dir should resolve");
+        assert_eq!(browsers, base.join("browsers"));
     }
 }
