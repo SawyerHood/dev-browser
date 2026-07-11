@@ -3,6 +3,18 @@
 import { execSync, spawn } from 'child_process';
 import { accessSync, chmodSync, constants, existsSync, readFileSync } from 'fs';
 import { arch, platform } from 'os';
+
+// Detect WSL so the "native binary not found" error can point Linux-under-Windows
+// users at the Windows .exe (invoked via interop) instead of leaving them stuck.
+function isWsl() {
+  if (platform() !== 'linux') return false;
+  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) return true;
+  try {
+    return readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft');
+  } catch {
+    return false;
+  }
+}
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -117,6 +129,13 @@ function main() {
     console.error('Reinstall the package to retry the download, or verify this release includes');
     console.error(`the asset "${binaryName}" for your platform.`);
     console.error(`Expected release asset URL: ${releaseAssetUrl}`);
+    if (isWsl()) {
+      console.error('');
+      console.error('You appear to be running under WSL. There is no linux-x64 binary here;');
+      console.error('call the Windows executable directly via interop instead, e.g.:');
+      console.error('  /mnt/c/Users/<you>/AppData/Roaming/npm/node_modules/dev-browser/bin/dev-browser-windows-x64.exe');
+      console.error('Run it headful — headless fails over the WSL->Windows hop.');
+    }
     process.exit(1);
   }
 
