@@ -60,7 +60,7 @@ pub fn install_skill(
     ) {
         InstallTargetSelection::Prompt => {
             let Some(selections) = prompt_for_install_targets()? else {
-                println!("Cancelled.");
+                eprintln!("Cancelled.");
                 return Ok(());
             };
 
@@ -73,30 +73,32 @@ pub fn install_skill(
         dirs::home_dir().ok_or("Could not determine the home directory for skill installation.")?;
 
     if selections.is_empty() {
-        println!("No install targets selected.");
+        eprintln!("No install targets selected.");
         return Ok(());
     }
 
     for selection in selections {
         let target = &INSTALL_TARGETS[selection];
         let result = install_target(&home_dir, target)?;
-        match result {
-            SyncResult::Installed => {
-                println!("Installed dev-browser skill to {}", target.file_display);
-            }
-            SyncResult::Updated => {
-                println!("Updated dev-browser skill at {}", target.file_display);
-            }
-            SyncResult::AlreadyInstalled => {
-                println!(
-                    "dev-browser skill is already installed at {}",
-                    target.file_display
-                );
-            }
-        }
+        eprintln!("{}", narration_for_result(&result, target));
     }
 
     Ok(())
+}
+
+/// This is prose, not data — `install-skill` has no structured stdout
+/// output, so all of it belongs on stderr (CLI-16). Split into a pure
+/// function so the message text itself stays unit-testable without
+/// capturing stderr.
+fn narration_for_result(result: &SyncResult, target: &InstallTarget) -> String {
+    match result {
+        SyncResult::Installed => format!("Installed dev-browser skill to {}", target.file_display),
+        SyncResult::Updated => format!("Updated dev-browser skill at {}", target.file_display),
+        SyncResult::AlreadyInstalled => format!(
+            "dev-browser skill is already installed at {}",
+            target.file_display
+        ),
+    }
 }
 
 fn resolve_install_target_selection(
@@ -172,7 +174,7 @@ fn ensure_directory(
                 format!("Failed to create {display_path}: {create_error}")
             })?;
             if announce_create {
-                println!("Created {display_path}");
+                eprintln!("Created {display_path}");
             }
             Ok(())
         }
@@ -236,7 +238,10 @@ fn interactive_terminal_available() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_install_target_selection, InstallTargetSelection};
+    use super::{
+        narration_for_result, resolve_install_target_selection, InstallTargetSelection,
+        SyncResult, INSTALL_TARGETS,
+    };
 
     #[test]
     fn explicit_claude_flag_skips_prompt() {
@@ -279,5 +284,27 @@ mod tests {
             InstallTargetSelection::Prompt => panic!("expected explicit selection"),
             InstallTargetSelection::Selected(actual) => assert_eq!(actual, expected),
         }
+    }
+
+    // --- CLI-16: narration text (routing itself is exercised by hand: the
+    // call sites use eprintln!, verified by inspection since println!/
+    // eprintln! destinations aren't practically interceptable from a plain
+    // unit test without a larger refactor to injectable writers). ----------
+
+    #[test]
+    fn narration_messages_reference_the_target_file_and_describe_the_outcome() {
+        let target = &INSTALL_TARGETS[0];
+
+        let installed = narration_for_result(&SyncResult::Installed, target);
+        assert!(installed.contains(target.file_display));
+        assert!(installed.starts_with("Installed"));
+
+        let updated = narration_for_result(&SyncResult::Updated, target);
+        assert!(updated.contains(target.file_display));
+        assert!(updated.starts_with("Updated"));
+
+        let already = narration_for_result(&SyncResult::AlreadyInstalled, target);
+        assert!(already.contains(target.file_display));
+        assert!(already.contains("already installed"));
     }
 }

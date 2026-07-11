@@ -93,11 +93,51 @@ pub fn read_line<R: BufRead>(reader: &mut R) -> io::Result<String> {
     let bytes_read = reader.read_line(&mut line)?;
 
     if bytes_read == 0 {
+        let hint = match crate::daemon::daemon_log_path() {
+            Ok(path) => format!(" Check the daemon log for details: {}", path.display()),
+            Err(_) => String::new(),
+        };
+
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
-            "Daemon connection closed unexpectedly",
+            format!("Daemon connection closed unexpectedly.{hint}"),
         ));
     }
 
     Ok(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_line;
+    use std::io::Cursor;
+
+    #[test]
+    fn read_line_reports_closed_connection_with_log_hint() {
+        let mut reader = Cursor::new(Vec::<u8>::new());
+        let error = read_line(&mut reader).expect_err("an empty stream should report EOF");
+        let message = error.to_string();
+
+        assert!(
+            message.starts_with("Daemon connection closed unexpectedly"),
+            "unexpected message: {message}"
+        );
+
+        // The log-path hint is only appended when the home directory
+        // resolves (it always should in a normal test/CI environment), but
+        // don't hard-fail the test if a sandbox lacks HOME entirely.
+        if let Ok(path) = crate::daemon::daemon_log_path() {
+            assert!(
+                message.contains(&path.display().to_string()),
+                "expected the daemon log path in: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_line_returns_the_line_when_data_is_present() {
+        let mut reader = Cursor::new(b"hello\n".to_vec());
+        let line = read_line(&mut reader).expect("a non-empty stream should read a line");
+        assert_eq!(line, "hello\n");
+    }
 }
