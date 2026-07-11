@@ -465,6 +465,36 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       expect(snapshot).not.toContain("Below the fold");
     }, 30_000);
 
+    it("emits small sequential node ids starting at 1 for a fresh document (P2-4)", async () => {
+      const { firstPageIds, secondPageIds } = await harness.runJson<{
+        firstPageIds: number[];
+        secondPageIds: number[];
+      }>(`
+        ${ID_HELPERS}
+        const page = await browser.getPage("dom-cua-sequential-ids-1");
+        await page.setContent(${JSON.stringify(DOM_TEST_PAGE_HTML)}, { waitUntil: "load" });
+        const firstPageIds = allIds(await page.domCua.getVisibleDom());
+
+        const secondPage = await browser.getPage("dom-cua-sequential-ids-2");
+        await secondPage.setContent(${JSON.stringify(DOM_TEST_PAGE_HTML)}, { waitUntil: "load" });
+        const secondPageIds = allIds(await secondPage.domCua.getVisibleDom());
+
+        console.log(JSON.stringify({ firstPageIds, secondPageIds }));
+      `);
+
+      // Ids on a fresh document start at 1 and climb sequentially — no huge
+      // random base — matching the tool's own --help examples (node_id=1,2).
+      expect(firstPageIds[0]).toBe(1);
+      expect(firstPageIds).toEqual([...firstPageIds].sort((a, b) => a - b));
+      expect(new Set(firstPageIds).size).toBe(firstPageIds.length);
+      expect(Math.max(...firstPageIds)).toBeLessThan(1000);
+
+      // A separate, unrelated page/document also starts small and sequential
+      // rather than continuing some ever-growing daemon-wide counter.
+      expect(secondPageIds[0]).toBe(1);
+      expect(Math.max(...secondPageIds)).toBeLessThan(1000);
+    }, 30_000);
+
     it("filters by viewport and includes elements after scrolling", async () => {
       const result = await harness.runJson<{ before: string; after: string }>(`
         const page = await browser.getPage("dom-cua-viewport");
@@ -696,7 +726,8 @@ describe.sequential("QuickJS page.domCua toolset", () => {
         console.log(JSON.stringify({ error, elapsed, clicks: await page.evaluate(() => window.clicks) }));
       `);
 
-      expect(result.error).toContain("stale or missing — re-run getVisibleDom()");
+      expect(result.error).toContain("did not finish scrolling into view within 3s");
+      expect(result.error).toContain("page.domCua.scroll({ nodeId })");
       expect(result.elapsed).toBeLessThan(10_000);
       expect(result.clicks).toEqual([]);
     }, 30_000);
@@ -734,7 +765,9 @@ describe.sequential("QuickJS page.domCua toolset", () => {
         console.log(JSON.stringify({ error, elapsed: Date.now() - start }));
       `);
 
-      expect(result.error).toContain("stale or missing — re-run getVisibleDom()");
+      expect(result.error).toContain("DOM node");
+      expect(result.error).toContain("is not a known node_id");
+      expect(result.error).toContain("navigation/reload reset the page's");
       expect(result.elapsed).toBeLessThan(3000);
     }, 30_000);
 
@@ -766,7 +799,7 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       expect(result.preNavIds).toHaveLength(3);
       expect(result.postNavIds).toHaveLength(5);
       expect(Math.min(...result.postNavIds)).toBeGreaterThan(Math.max(...result.preNavIds));
-      expect(result.error).toContain("stale or missing — re-run getVisibleDom()");
+      expect(result.error).toContain("is not a known node_id");
       expect(result.clicks).toEqual([]);
     }, 30_000);
 
@@ -798,7 +831,7 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       expect(result.preNavIds).toHaveLength(3);
       expect(result.postNavIds).toHaveLength(5);
       expect(result.postNavIds.filter((id) => result.preNavIds.includes(id))).toEqual([]);
-      expect(result.error).toContain("stale or missing — re-run getVisibleDom()");
+      expect(result.error).toContain("is not a known node_id");
       expect(result.clicks).toEqual([]);
     }, 30_000);
 
@@ -831,8 +864,73 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       `);
 
       expect(result.newId).toBeGreaterThan(result.oldId);
-      expect(result.error).toContain("stale or missing — re-run getVisibleDom()");
+      // A fresh getVisibleDom() was taken after the frame navigated, so the
+      // old id simply isn't part of the latest registration anymore — this
+      // is the "unknown/reset" cause, not "element gone" (see the dedicated
+      // test below for the case where no re-snapshot happens first).
+      expect(result.error).toContain("DOM node");
+      expect(result.error).toContain("is not a known node_id");
       expect(result.frameClicks).toEqual([]);
+    }, 30_000);
+
+    it("fails with an element-gone error when a frame navigates internally and the old id is used without re-snapshotting", async () => {
+      const hostUrl = `${server.baseUrl}/dom/named-frame-host`;
+      const frameTwoUrl = `${server.baseUrl}/dom/frame-two`;
+      const result = await harness.runJson<{
+        oldId: number;
+        error: string | null;
+        frameClicks: string[];
+      }>(`
+        ${ID_HELPERS}
+        const page = await browser.getPage("dom-cua-frame-nav-no-resnapshot");
+        await page.goto(${JSON.stringify(hostUrl)}, { waitUntil: "load" });
+        const first = await page.domCua.getVisibleDom();
+        const oldId = idFor(first, ">FrameOne<");
+        const frame = page.frames().find((candidate) => candidate.name() === "child");
+        await frame.goto(${JSON.stringify(frameTwoUrl)}, { waitUntil: "load" });
+        let error = null;
+        try {
+          await page.domCua.click({ nodeId: oldId, waitForNavigation: false });
+        } catch (caught) {
+          error = String((caught && caught.message) || caught);
+        }
+        const frameClicks = await frame.evaluate(() => window.frameClicks);
+        console.log(JSON.stringify({ oldId, error, frameClicks }));
+      `);
+
+      // The frame (found by name) still exists on the page, and domCua's
+      // record that oldId belongs to it is still around (no re-snapshot
+      // cleared it) — but the frame's own internal navigation wiped its
+      // tracked elements, so the ref can't be resolved inside it anymore.
+      expect(result.error).toContain("DOM node");
+      expect(result.error).toContain("is no longer present");
+      expect(result.error).toContain("navigated internally");
+      expect(result.frameClicks).toEqual([]);
+    }, 30_000);
+
+    it("fails with a frame-specific error when the containing iframe is removed from the DOM", async () => {
+      const hostUrl = `${server.baseUrl}/dom/iframe-host`;
+      const result = await harness.runJson<{ error: string | null }>(`
+        ${ID_HELPERS}
+        const page = await browser.getPage("dom-cua-frame-removed");
+        await page.goto(${JSON.stringify(hostUrl)}, { waitUntil: "load" });
+        const snapshot = await page.domCua.getVisibleDom();
+        const nodeId = idFor(snapshot, ">Inner button<");
+        await page.evaluate(() => document.getElementById("child").remove());
+        await page.waitForFunction(() => document.getElementById("child") === null, { timeout: 5000 });
+        let error = null;
+        try {
+          await page.domCua.click({ nodeId, waitForNavigation: false });
+        } catch (caught) {
+          error = String((caught && caught.message) || caught);
+        }
+        console.log(JSON.stringify({ error }));
+      `);
+
+      expect(result.error).toContain("DOM node");
+      expect(result.error).toContain("belonged to a frame that no longer exists");
+      expect(result.error).not.toContain("is no longer present");
+      expect(result.error).not.toContain("is not a known node_id");
     }, 30_000);
   });
 
@@ -928,8 +1026,9 @@ describe.sequential("QuickJS page.domCua toolset", () => {
         frames: [{ key: "main", docToken: "doc-1", refs: [1, 2, 3] }],
       });
       expect(first.blocked).toBe(false);
-      expect(first.ids[0]).toHaveLength(3);
-      expect(first.ids[0][0]).toBeGreaterThanOrEqual(1_000_000);
+      // P2-4: node ids start small and sequential (1, 2, 3 ...), matching the
+      // tool's own --help examples, instead of a huge random base.
+      expect(first.ids[0]).toEqual([1, 2, 3]);
 
       const second = registerInRealm({
         frames: [{ key: "main", docToken: "doc-1", refs: [2, 3, 9] }],
@@ -938,6 +1037,7 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       expect(second.ids[0][0]).toBe(first.ids[0][1]);
       expect(second.ids[0][1]).toBe(first.ids[0][2]);
       expect(second.ids[0][2]).toBeGreaterThan(first.ids[0][2]);
+      expect(second.ids[0]).toEqual([2, 3, 4]);
 
       const replaced = registerInRealm({
         frames: [{ key: "main", docToken: "doc-2", refs: [1, 2, 3] }],
@@ -946,9 +1046,10 @@ describe.sequential("QuickJS page.domCua toolset", () => {
       for (const id of replaced.ids[0]) {
         expect(id).toBeGreaterThan(second.ids[0][2]);
       }
+      expect(replaced.ids[0]).toEqual([5, 6, 7]);
     });
 
-    it("starts at a high base when sessionStorage works but holds no counter", () => {
+    it("starts at a low sequential base when sessionStorage works but holds no counter", () => {
       const storage = new Map<string, string>();
       const realm = vm.createContext({
         sessionStorage: {
@@ -964,7 +1065,7 @@ describe.sequential("QuickJS page.domCua toolset", () => {
         frames: [{ key: "main", docToken: "doc-1", refs: [1, 2] }],
       });
       expect(result.blocked).toBe(false);
-      expect(Math.min(...result.ids[0])).toBeGreaterThanOrEqual(1_000_000);
+      expect(result.ids[0]).toEqual([1, 2]);
       expect(Number(storage.get("__devBrowserDomCuaNextPublicId"))).toBeGreaterThan(
         Math.max(...result.ids[0])
       );

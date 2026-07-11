@@ -257,16 +257,31 @@ describe.sequential("QuickJS sandbox file I/O", () => {
     `);
   }, 120_000);
 
-  it("rejects symlinked temp-file targets", async () => {
+  it("rejects symlinked temp-file targets", async (ctx) => {
     const symlinkName = "sandbox-file-io-symlink.txt";
     const symlinkPath = path.join(DEV_BROWSER_TMP_DIR, symlinkName);
     const targetPath = path.join(os.tmpdir(), "sandbox-file-io-symlink-target.txt");
 
-    cleanupPaths.add(symlinkPath);
     cleanupPaths.add(targetPath);
 
     await writeFileFs(targetPath, "outside", "utf8");
-    await symlink(targetPath, symlinkPath);
+    try {
+      await symlink(targetPath, symlinkPath);
+    } catch (error) {
+      // Creating a symlink on Windows requires SeCreateSymbolicLinkPrivilege
+      // (Developer Mode or an elevated shell). When the host can't grant it,
+      // fs.symlink throws EPERM/EACCES and this fixture can't be built. Skip
+      // rather than fail: this test asserts the SANDBOX rejects symlinked
+      // targets, not that the OS can create symlinks — the assertion still
+      // runs in full on any host where symlink creation is permitted.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        ctx.skip();
+        return;
+      }
+      throw error;
+    }
+    cleanupPaths.add(symlinkPath);
 
     await expectSandboxScriptToThrow(
       `await writeFile(${JSON.stringify(symlinkName)}, "should fail");`
