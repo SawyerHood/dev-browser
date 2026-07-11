@@ -4,6 +4,7 @@ LLM USAGE GUIDE:
   Use descriptive page names like "login", "checkout", or "results" instead of "page1".
   Named pages from browser.getPage("name") persist between script runs, so you usually do not need to re-navigate.
   Inside page.evaluate(...), write plain JavaScript only - no TypeScript syntax in the browser context.
+  document, window, and other DOM globals exist only inside page.evaluate(...) - never at the top level of the script. Referencing them at the top level raises "document is not defined".
   On Windows/PowerShell, use here-strings to pipe multiline scripts:
     @"
     const page = await browser.getPage("main");
@@ -131,6 +132,12 @@ LLM USAGE GUIDE:
       title: await page.title(),
     }, null, 2));
     EOF
+
+  Exceptions to standard Playwright behavior:
+    Pages behave like ordinary Playwright Page objects, with two exceptions caused by the sandbox having no filesystem:
+    setInputFiles(path) fails - there is no local file to read.
+    addInitScript(...), in any form, is not supported.
+    For uploads, generate the file in the page context instead and inject it: build a Blob/File on a canvas, wrap it in a DataTransfer, and assign it to the input's .files.
 
   Common Playwright Page methods:
     page.goto(url, { waitUntil: "domcontentloaded" })
