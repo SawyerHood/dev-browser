@@ -264,6 +264,23 @@ export class BrowserManager {
     return entry.context.newPage();
   }
 
+  /**
+   * Apply the script's overall --timeout budget as the per-action default for
+   * this browser's context, so goto/click/screenshot/snapshotForAI inherit it
+   * instead of Playwright's fixed 30s default. Without this, `--timeout 90`
+   * still let each individual action die at 30s — the costliest timeout
+   * confusion in the field. The script-level clock remains the real ceiling.
+   * No-op if the browser isn't running.
+   */
+  setDefaultTimeouts(browserName: string, timeoutMs: number): void {
+    const entry = this.browsers.get(browserName);
+    if (!entry) {
+      return;
+    }
+    entry.context.setDefaultTimeout(timeoutMs);
+    entry.context.setDefaultNavigationTimeout(timeoutMs);
+  }
+
   async listPages(browserName: string): Promise<BrowserPageSummary[]> {
     const entry = this.browsers.get(browserName);
     if (!entry || !entry.browser.isConnected()) {

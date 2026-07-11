@@ -165,9 +165,13 @@ async function handleExecute(socket: net.Socket, request: ExecuteRequest): Promi
         }
       },
       runScript: async (currentRequest, output, context) => {
+        const timeout = Math.max(1, context.deadline - Date.now());
+        // Propagate the script's --timeout budget to per-action Playwright
+        // timeouts so goto/click/screenshot don't independently die at 30s.
+        manager.setDefaultTimeouts(currentRequest.browser, timeout);
         await runScript(currentRequest.script, manager, currentRequest.browser, output, {
           signal: context.signal,
-          timeout: Math.max(1, context.deadline - Date.now()),
+          timeout,
         });
       },
     }
