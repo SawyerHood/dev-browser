@@ -220,7 +220,7 @@ export class QuickJSSandbox {
           closePage: (name) => this.#closePage(name),
           saveScreenshot: (name, data) => this.#writeTempFile(name, data),
           writeFile: (name, data) => this.#writeTempFile(name, data),
-          readFile: (name) => this.#readTempFile(name),
+          readFile: (name, encoding) => this.#readTempFile(name, encoding),
         },
         onConsole: (level, args) => {
           this.#routeConsole(level, args);
@@ -527,8 +527,8 @@ export class QuickJSSandbox {
                   writable: false,
                 },
                 readFile: {
-                  value: async (name) => {
-                    return await hostCall("readFile", JSON.stringify([name]));
+                  value: async (name, encoding) => {
+                    return await hostCall("readFile", JSON.stringify([name, encoding]));
                   },
                   configurable: false,
                   enumerable: true,
@@ -738,8 +738,11 @@ export class QuickJSSandbox {
     );
   }
 
-  async #readTempFile(name: unknown): Promise<string> {
-    return await readDevBrowserTempFile(requireString(name, "File name"));
+  async #readTempFile(name: unknown, encoding?: unknown): Promise<string> {
+    const resolvedEncoding = encoding === "base64" ? "base64" : "utf8";
+    return await readDevBrowserTempFile(requireString(name, "File name"), {
+      encoding: resolvedEncoding,
+    });
   }
 
   async #cleanupAnonymousPages(options: { suppressErrors?: boolean } = {}): Promise<void> {

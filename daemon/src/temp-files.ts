@@ -188,16 +188,25 @@ export async function writeDevBrowserTempFile(
   return destinationPath;
 }
 
-export async function readDevBrowserTempFile(fileName: unknown): Promise<string> {
+export async function readDevBrowserTempFile(
+  fileName: unknown,
+  options: { encoding?: "utf8" | "base64" } = {}
+): Promise<string> {
+  const encoding = options.encoding ?? "utf8";
   const destinationPath = await resolveDevBrowserTempPath(fileName);
   await assertDestinationIsNotSymlink(destinationPath);
 
   let handle: FileHandle | undefined;
   try {
     handle = await open(destinationPath, constants.O_RDONLY | NOFOLLOW_FLAG);
-    return await handle.readFile({
-      encoding: "utf8",
-    });
+    // "utf8" corrupts binary (a screenshot read back becomes replacement chars);
+    // "base64" reads the raw bytes and returns them base64-encoded so the caller
+    // can round-trip binary data losslessly.
+    if (encoding === "base64") {
+      const buffer = await handle.readFile();
+      return buffer.toString("base64");
+    }
+    return await handle.readFile({ encoding: "utf8" });
   } catch (error) {
     throw normalizeSymlinkError(error, destinationPath);
   } finally {
