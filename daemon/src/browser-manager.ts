@@ -3,6 +3,20 @@ import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 
+// A --browser name becomes a directory segment in the on-disk profile path
+// (`<baseDir>/<name>/chromium-profile`). Reject anything that could escape that
+// directory before it ever reaches path.join — mirrors the containment guard in
+// temp-files.ts. Without this, `--browser ../../../x` writes outside baseDir.
+const UNSAFE_BROWSER_NAME = /[\\/]|\.\./;
+function assertSafeBrowserName(name: string): void {
+  if (typeof name !== "string" || name.length === 0 || UNSAFE_BROWSER_NAME.test(name)) {
+    throw new Error(
+      `Invalid --browser name ${JSON.stringify(name)}: it may not be empty or contain ` +
+        `path separators or "..". Use a simple name like "default" or "agent-3".`
+    );
+  }
+}
+
 export interface BrowserEntry {
   name: string;
   type: "launched" | "connected";
@@ -101,6 +115,7 @@ export class BrowserManager {
       signal?: AbortSignal;
     } = {}
   ): Promise<BrowserEntry> {
+    assertSafeBrowserName(name);
     this.throwIfOperationAborted(options);
     await this.ensureBaseDir();
     this.throwIfOperationAborted(options);
@@ -185,6 +200,7 @@ export class BrowserManager {
     endpoint: string,
     options: BrowserOperationOptions = {}
   ): Promise<BrowserEntry> {
+    assertSafeBrowserName(name);
     if (endpoint === "auto") {
       return this.autoConnect(name, options);
     }
@@ -376,6 +392,7 @@ export class BrowserManager {
     ignoreHTTPSErrors: boolean,
     operation: BrowserOperationOptions = {}
   ): Promise<BrowserEntry> {
+    assertSafeBrowserName(name);
     const profileDir = path.join(this.baseDir, name, "chromium-profile");
     await this.dependencies.mkdir(profileDir, { recursive: true });
 
