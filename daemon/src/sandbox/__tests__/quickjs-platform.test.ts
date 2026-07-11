@@ -107,7 +107,7 @@ describe("quickjsPlatform fs/path unsupported-API messages (P2-3)", () => {
     }
     expect(message).toContain("setInputFiles({ name, mimeType, buffer })");
     expect(message).toContain("readFile()");
-    expect(message).toContain("addInitScript({ path })");
+    expect(message).toContain("uploadFile(pageName, selector,");
   });
 
   it("gives path() the same no-filesystem explanation", () => {
@@ -118,7 +118,7 @@ describe("quickjsPlatform fs/path unsupported-API messages (P2-3)", () => {
       message = error instanceof Error ? error.message : String(error);
     }
     expect(message).toContain("path is not available in the QuickJS sandbox");
-    expect(message).toContain("addInitScript({ content })");
+    expect(message).toContain("addInitScript() is unsupported outright");
   });
 
   it("leaves the other unsupported stubs on their generic message", () => {
@@ -164,7 +164,7 @@ describe("quickjsPlatform fs/path unsupported-API messages (P2-3)", () => {
       expect(result.error).toContain("setInputFiles({ name, mimeType, buffer })");
     }, 30_000);
 
-    it("surfaces the same authored message for addInitScript({ path })", async () => {
+    it("rejects addInitScript({ path }) with the dedicated addInitScript error, not the fs stub", async () => {
       const result = await harness.runJson<{ error: string | null }>(`
         const page = await browser.getPage("quickjs-platform-init-script");
         let error = null;
@@ -176,8 +176,46 @@ describe("quickjsPlatform fs/path unsupported-API messages (P2-3)", () => {
         console.log(JSON.stringify({ error }));
       `);
 
-      expect(result.error).toContain("fs is not available in the QuickJS sandbox");
-      expect(result.error).toContain("addInitScript({ content })");
+      expect(result.error).toContain(
+        "addInitScript() is not supported in the QuickJS sandbox"
+      );
+      expect(result.error).toContain("page.evaluate()");
+    }, 30_000);
+
+    it("rejects every other addInitScript() input form with the same authored error", async () => {
+      const result = await harness.runJson<{
+        functionForm: string | null;
+        stringForm: string | null;
+        contentForm: string | null;
+        contextForm: string | null;
+      }>(`
+        const page = await browser.getPage("quickjs-platform-init-script-forms");
+        const capture = async (call) => {
+          try {
+            await call();
+            return null;
+          } catch (caught) {
+            return String((caught && caught.message) || caught);
+          }
+        };
+
+        const functionForm = await capture(() => page.addInitScript(() => {}));
+        const stringForm = await capture(() => page.addInitScript("1 + 1"));
+        const contentForm = await capture(() => page.addInitScript({ content: "1 + 1" }));
+        const contextForm = await capture(() => page.context().addInitScript(() => {}));
+
+        console.log(JSON.stringify({ functionForm, stringForm, contentForm, contextForm }));
+      `);
+
+      for (const message of [
+        result.functionForm,
+        result.stringForm,
+        result.contentForm,
+        result.contextForm,
+      ]) {
+        expect(message).toContain("addInitScript() is not supported in the QuickJS sandbox");
+        expect(message).toContain("page.evaluate()");
+      }
     }, 30_000);
   });
 });

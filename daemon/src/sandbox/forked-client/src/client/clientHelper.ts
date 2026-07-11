@@ -53,3 +53,25 @@ export async function evaluationScript(
 export function addSourceUrlToScript(source: string, path: string): string {
   return `${source}\n//# sourceURL=${path.replace(/\n/g, "")}`;
 }
+
+// addInitScript() does not work in the QuickJS sandbox in ANY of its input
+// forms. The { path } form fails at the platform's fs() stub (see
+// quickjs-platform.ts) because there is no real filesystem to read from. The
+// function/string/{ content } forms get past evaluationScript() just fine —
+// but fail deeper, when the server tries to relay the resulting init-script
+// registration back across the sandbox's protocol bridge, surfacing only as
+// an opaque `__transport_receive failed: expected object, got undefined` /
+// ValidationError with nothing pointing at addInitScript as the cause. Fail
+// fast, before any of that, with an authored error that names the limitation
+// and the workaround (agents lose 15-20+ minutes rediscovering this per the
+// field taxonomy at ObsidianVault/References/dev-browser-taxonomy).
+export function assertAddInitScriptSupported(): never {
+  throw new Error(
+    "addInitScript() is not supported in the QuickJS sandbox, in any input form (function, " +
+      "string, { content }, or { path }) — it fails deep in the sandbox's protocol bridge with " +
+      "an opaque error. Inject your script via page.evaluate() after navigation instead, e.g. " +
+      "`await page.goto(url); await page.evaluate(() => { /* your init code */ });`. If you " +
+      "need the script to run before the page's own scripts, evaluate it against a blank page " +
+      "before navigating, or re-apply it after each navigation."
+  );
+}

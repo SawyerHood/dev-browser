@@ -20,7 +20,7 @@ import { Artifact } from "./artifact";
 import { Browser } from "./browser";
 import { CDPSession } from "./cdpSession";
 import { ChannelOwner } from "./channelOwner";
-import { evaluationScript } from "./clientHelper";
+import { assertAddInitScriptSupported } from "./clientHelper";
 import { Clock } from "./clock";
 import { ConsoleMessage } from "./consoleMessage";
 import { Dialog } from "./dialog";
@@ -382,8 +382,7 @@ export class BrowserContext
   }
 
   async addInitScript(script: Function | string | { path?: string; content?: string }, arg?: any) {
-    const source = await evaluationScript(this._platform, script, arg);
-    return DisposableObject.from((await this._channel.addInitScript({ source })).disposable);
+    assertAddInitScriptSupported();
   }
 
   async exposeBinding(

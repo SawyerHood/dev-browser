@@ -62,7 +62,7 @@ Use `waitUntil: "domcontentloaded"`, not `"networkidle"` — `networkidle` hangs
 - No `require`/`import`/`process`/`fs`/`fetch` at the script's top level.
 - **`document`/`window`/DOM globals only exist inside `page.evaluate(() => ...)`** — never at the top level. `document is not defined` means you're outside `evaluate()`.
 - **`setInputFiles` with a host file path fails** — there's no filesystem in the sandbox. For uploads, generate the file in-page (canvas → `Blob`/`File` → `DataTransfer`) and inject it.
-- **`readFile()` is UTF-8 only** — don't use it to round-trip a screenshot or other binary file; it will corrupt it.
+- **`readFile()` defaults to UTF-8** and will corrupt a screenshot or other binary file — pass `readFile(name, "base64")` to round-trip binary losslessly.
 
 ## Usage
 
