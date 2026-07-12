@@ -40,3 +40,6 @@ Thumbs.db
 tmp/
 yarn-debug.log*
 yarn-error.log*
+
+# agent-ergonomics audit workspace (provenance, not shipped)
+agent_ergonomics_audit/

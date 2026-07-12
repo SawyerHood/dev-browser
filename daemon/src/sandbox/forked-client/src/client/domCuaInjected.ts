@@ -254,7 +254,20 @@ export const domCuaRegister = function (data) {
       stored = null;
     }
     const parsed = stored === null ? NaN : parseInt(stored, 10);
-    next = parsed >= 1 ? parsed : 1_000_000 + Math.floor(Math.random() * 2_000_000_000);
+    // Start small and sequential (1, 2, 3 ...) so node_id values match the
+    // tool's own --help examples, instead of the old huge-random base. The
+    // sticky publicIdByFrameKey map (below) still keeps an element's id
+    // stable across repeated getVisibleDom() calls on the same document, and
+    // sessionStorage still carries the counter across same-origin
+    // navigations so post-navigation ids never collide with pre-navigation
+    // ones. For a genuinely fresh document with no sessionStorage history
+    // (first load, or a cross-origin navigation sessionStorage can't bridge),
+    // domCua.ts passes a small, always-increasing seedHint derived from a
+    // navigation-proof call counter on the DomCua instance, so different
+    // documents on the same Page still never collide even without a random
+    // base. Falls back to 1 when no hint is given (e.g. direct calls/tests).
+    const seedHint = typeof data.seedHint === "number" && data.seedHint >= 1 ? data.seedHint : 1;
+    next = parsed >= 1 ? parsed : seedHint;
   }
 
   if (!(state.publicIdByFrameKey instanceof Map)) state.publicIdByFrameKey = new Map();

@@ -18,7 +18,7 @@
 
 import { Artifact } from "./artifact";
 import { ChannelOwner } from "./channelOwner";
-import { evaluationScript } from "./clientHelper";
+import { assertAddInitScriptSupported } from "./clientHelper";
 import { Coverage } from "./coverage";
 import { Cua } from "./cua";
 import { DisposableObject, DisposableStub } from "./disposable";
@@ -680,8 +680,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
   }
 
   async addInitScript(script: Function | string | { path?: string; content?: string }, arg?: any) {
-    const source = await evaluationScript(this._platform, script, arg);
-    return DisposableObject.from((await this._channel.addInitScript({ source })).disposable);
+    assertAddInitScriptSupported();
   }
 
   async route(

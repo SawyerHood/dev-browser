@@ -10,6 +10,11 @@ const MAX_LINES = 200;
 const MAX_CHARS = 20_000;
 const FRAME_TRUNCATION_MARKER = "<!-- output truncated: frame element budget reached -->";
 const SNAPSHOT_TRUNCATION_MARKER = "<!-- output truncated: snapshot budget reached -->";
+// Each fresh document seeds its node_id counter from a block this wide (see
+// #registrationCount below) — sized well above MAX_LINES/the per-frame
+// element budgets so one document's ids can never spill into the next
+// document's block.
+const SEED_HINT_BLOCK_SIZE = 10_000;
 
 function frameKey(frame: Frame): string {
   const name = frame.name();
@@ -23,8 +28,41 @@ function frameKey(frame: Frame): string {
   return `${frame.url()}@${indexPath.join(".")}`;
 }
 
-function staleNodeError(nodeId: number): Error {
-  return new Error(`DOM node ${nodeId} is stale or missing — re-run getVisibleDom()`);
+// domCua's stale-node failure has four distinct root causes that all used to
+// collapse into one "stale or missing" message. Splitting them lets an agent
+// tell "the page navigated" from "the element was actually removed" from
+// "it's just slow to scroll to" — each message below says what to do next.
+
+function unknownNodeIdError(nodeId: number): Error {
+  return new Error(
+    `DOM node ${nodeId} is not a known node_id — either a navigation/reload reset the page's ` +
+      `tracked elements, or this id was never returned by getVisibleDom(). Re-run ` +
+      `page.domCua.getVisibleDom() and use one of its node_id values.`
+  );
+}
+
+function frameGoneError(nodeId: number): Error {
+  return new Error(
+    `DOM node ${nodeId} belonged to a frame that no longer exists on the page (the iframe was ` +
+      `likely removed or replaced). Re-run page.domCua.getVisibleDom() to get node_id values for ` +
+      `the frames that are still present.`
+  );
+}
+
+function elementGoneError(nodeId: number): Error {
+  return new Error(
+    `DOM node ${nodeId} is no longer present (its element was removed/replaced, or the frame it ` +
+      `lived in navigated internally, wiping its tracked elements). Re-run ` +
+      `page.domCua.getVisibleDom() and act on the fresh node_id for that element.`
+  );
+}
+
+function scrollTimeoutError(nodeId: number): Error {
+  return new Error(
+    `DOM node ${nodeId} did not finish scrolling into view within 3s — it may be hidden, ` +
+      `non-scrollable, or inside a slow-loading container, rather than actually gone. Retry the ` +
+      `action, or call page.domCua.scroll({ nodeId }) first to bring it into view.`
+  );
 }
 
 function blockedStateError(): Error {
@@ -33,6 +71,22 @@ function blockedStateError(): Error {
 
 export class DomCua {
   #page: Page;
+  // Counts calls to getVisibleDom() on this Page. domCua's node_id counter
+  // normally lives in the page's own JS realm (browser-side) and, for
+  // same-origin navigations, in sessionStorage — both keep ids small and
+  // sequential across repeated snapshots. But a genuinely fresh document (the
+  // very first load, or any navigation onto an origin sessionStorage has
+  // never seen — most notably a cross-origin navigation, where
+  // sessionStorage cannot carry a counter forward) has no such history to
+  // consult. For that case only, domCuaRegister falls back to a hint derived
+  // from this always-increasing, browser-navigation-proof counter instead of
+  // a large random base: each fresh document gets its own
+  // SEED_HINT_BLOCK_SIZE-wide block, so ids stay small (matching this tool's
+  // own --help examples) while two different documents viewed by the same
+  // Page can never hand out overlapping node_id values — a stale id from
+  // before a navigation reliably fails instead of silently resolving to the
+  // wrong element on the new document.
+  #registrationCount = 0;
 
   constructor(page: Page) {
     this.#page = page;
@@ -75,7 +129,10 @@ export class DomCua {
       });
     }
 
+    this.#registrationCount += 1;
+    const seedHint = 1 + (this.#registrationCount - 1) * SEED_HINT_BLOCK_SIZE;
     const registration = await mainFrame.evaluate(domCuaRegister, {
+      seedHint,
       frames: snapshots.map((snapshot) => ({
         key: snapshot.key,
         docToken: snapshot.docToken,
@@ -170,9 +227,9 @@ export class DomCua {
         (id) => globalThis.__devBrowserDomCua?.actionableByPublicId?.get(id) ?? null,
         nodeId
       );
-    if (!target) throw staleNodeError(nodeId);
+    if (!target) throw unknownNodeIdError(nodeId);
     const frame = this.#page.frames().find((candidate) => frameKey(candidate) === target.frameKey);
-    if (!frame) throw staleNodeError(nodeId);
+    if (!frame) throw frameGoneError(nodeId);
     const handle = await frame.evaluateHandle(
       (ref) => globalThis.__devBrowserDomCua?.refToElement?.get(ref) ?? null,
       target.ref
@@ -180,17 +237,17 @@ export class DomCua {
     const element = handle.asElement();
     if (!element) {
       await handle.dispose();
-      throw staleNodeError(nodeId);
+      throw elementGoneError(nodeId);
     }
     try {
       try {
         await element.scrollIntoViewIfNeeded({ timeout: 3000 });
       } catch (error) {
-        if (error instanceof TimeoutError) throw staleNodeError(nodeId);
+        if (error instanceof TimeoutError) throw scrollTimeoutError(nodeId);
         throw error;
       }
       const box = await element.boundingBox();
-      if (!box) throw staleNodeError(nodeId);
+      if (!box) throw elementGoneError(nodeId);
       return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     } finally {
       await element.dispose();

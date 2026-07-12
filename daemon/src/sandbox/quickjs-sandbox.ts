@@ -220,7 +220,9 @@ export class QuickJSSandbox {
           closePage: (name) => this.#closePage(name),
           saveScreenshot: (name, data) => this.#writeTempFile(name, data),
           writeFile: (name, data) => this.#writeTempFile(name, data),
-          readFile: (name) => this.#readTempFile(name),
+          readFile: (name, encoding) => this.#readTempFile(name, encoding),
+          uploadFile: (pageName, selector, name, mimeType, base64) =>
+            this.#uploadFile(pageName, selector, name, mimeType, base64),
         },
         onConsole: (level, args) => {
           this.#routeConsole(level, args);
@@ -527,8 +529,50 @@ export class QuickJSSandbox {
                   writable: false,
                 },
                 readFile: {
-                  value: async (name) => {
-                    return await hostCall("readFile", JSON.stringify([name]));
+                  value: async (name, encoding) => {
+                    return await hostCall("readFile", JSON.stringify([name, encoding]));
+                  },
+                  configurable: false,
+                  enumerable: true,
+                  writable: false,
+                },
+                uploadFile: {
+                  // setInputFiles({ path }) and setInputFiles({ buffer }) both fail inside the
+                  // sandboxed Playwright client: the path form needs a real filesystem
+                  // (unavailable here, see quickjs-platform.ts's fs() stub) and the buffer form
+                  // still round-trips through the sandbox's protocol bridge. This helper instead
+                  // asks the DAEMON (real Node.js, real Playwright, real fs) to call
+                  // page.setInputFiles() directly on the real page object — bypassing the
+                  // sandboxed client and its bridge entirely for this one operation.
+                  value: async (pageName, selector, file) => {
+                    if (typeof pageName !== "string" || pageName.length === 0) {
+                      throw new TypeError("uploadFile: pageName must be a non-empty string");
+                    }
+                    if (typeof selector !== "string" || selector.length === 0) {
+                      throw new TypeError("uploadFile: selector must be a non-empty string");
+                    }
+                    if (typeof file !== "object" || file === null) {
+                      throw new TypeError(
+                        "uploadFile: file must be an object with { name, mimeType, base64 } or " +
+                          "{ name, mimeType, buffer }",
+                      );
+                    }
+
+                    let base64;
+                    if (typeof file.base64 === "string") {
+                      base64 = file.base64;
+                    } else if (file.buffer !== undefined) {
+                      base64 = Buffer.from(file.buffer).toString("base64");
+                    } else {
+                      throw new TypeError(
+                        "uploadFile: file must include either a base64 string or a buffer",
+                      );
+                    }
+
+                    return await hostCall(
+                      "uploadFile",
+                      JSON.stringify([pageName, selector, file.name, file.mimeType, base64]),
+                    );
                   },
                   configurable: false,
                   enumerable: true,
@@ -731,6 +775,31 @@ export class QuickJSSandbox {
     );
   }
 
+  // Runs on the daemon side against a REAL Playwright `Page` (from the
+  // `playwright` package the manager launched, not the sandboxed forked
+  // client) — so Node's real Buffer/fs are available and setInputFiles's
+  // FilePayload form works exactly like it would in any normal Playwright
+  // script. This is what lets uploadFile() bypass the QuickJS sandbox's
+  // filesystem-less setInputFiles failure entirely instead of working around
+  // it from inside the guest.
+  async #uploadFile(
+    pageName: unknown,
+    selector: unknown,
+    name: unknown,
+    mimeType: unknown,
+    base64: unknown
+  ): Promise<void> {
+    const page = await this.#options.manager.getPage(
+      this.#options.browserName,
+      requireString(pageName, "Page name")
+    );
+    await page.setInputFiles(requireString(selector, "Selector"), {
+      name: requireString(name, "File name"),
+      mimeType: requireString(mimeType, "MIME type"),
+      buffer: Buffer.from(requireString(base64, "File data (base64)"), "base64"),
+    });
+  }
+
   async #writeTempFile(name: unknown, payload: unknown): Promise<string> {
     return await writeDevBrowserTempFile(
       requireString(name, "File name"),
@@ -738,8 +807,11 @@ export class QuickJSSandbox {
     );
   }
 
-  async #readTempFile(name: unknown): Promise<string> {
-    return await readDevBrowserTempFile(requireString(name, "File name"));
+  async #readTempFile(name: unknown, encoding?: unknown): Promise<string> {
+    const resolvedEncoding = encoding === "base64" ? "base64" : "utf8";
+    return await readDevBrowserTempFile(requireString(name, "File name"), {
+      encoding: resolvedEncoding,
+    });
   }
 
   async #cleanupAnonymousPages(options: { suppressErrors?: boolean } = {}): Promise<void> {
