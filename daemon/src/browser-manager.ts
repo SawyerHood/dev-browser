@@ -3,6 +3,20 @@ import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 
+// A --browser name becomes a directory segment in the on-disk profile path
+// (`<baseDir>/<name>/chromium-profile`). Reject anything that could escape that
+// directory before it ever reaches path.join — mirrors the containment guard in
+// temp-files.ts. Without this, `--browser ../../../x` writes outside baseDir.
+const UNSAFE_BROWSER_NAME = /[\\/]|\.\./;
+function assertSafeBrowserName(name: string): void {
+  if (typeof name !== "string" || name.length === 0 || UNSAFE_BROWSER_NAME.test(name)) {
+    throw new Error(
+      `Invalid --browser name ${JSON.stringify(name)}: it may not be empty or contain ` +
+        `path separators or "..". Use a simple name like "default" or "agent-3".`
+    );
+  }
+}
+
 export interface BrowserEntry {
   name: string;
   type: "launched" | "connected";
@@ -101,6 +115,7 @@ export class BrowserManager {
       signal?: AbortSignal;
     } = {}
   ): Promise<BrowserEntry> {
+    assertSafeBrowserName(name);
     this.throwIfOperationAborted(options);
     await this.ensureBaseDir();
     this.throwIfOperationAborted(options);
@@ -185,6 +200,7 @@ export class BrowserManager {
     endpoint: string,
     options: BrowserOperationOptions = {}
   ): Promise<BrowserEntry> {
+    assertSafeBrowserName(name);
     if (endpoint === "auto") {
       return this.autoConnect(name, options);
     }
@@ -246,6 +262,23 @@ export class BrowserManager {
   async newPage(browserName: string): Promise<Page> {
     const entry = this.getBrowserEntry(browserName);
     return entry.context.newPage();
+  }
+
+  /**
+   * Apply the script's overall --timeout budget as the per-action default for
+   * this browser's context, so goto/click/screenshot/snapshotForAI inherit it
+   * instead of Playwright's fixed 30s default. Without this, `--timeout 90`
+   * still let each individual action die at 30s — the costliest timeout
+   * confusion in the field. The script-level clock remains the real ceiling.
+   * No-op if the browser isn't running.
+   */
+  setDefaultTimeouts(browserName: string, timeoutMs: number): void {
+    const entry = this.browsers.get(browserName);
+    if (!entry) {
+      return;
+    }
+    entry.context.setDefaultTimeout(timeoutMs);
+    entry.context.setDefaultNavigationTimeout(timeoutMs);
   }
 
   async listPages(browserName: string): Promise<BrowserPageSummary[]> {
@@ -376,6 +409,7 @@ export class BrowserManager {
     ignoreHTTPSErrors: boolean,
     operation: BrowserOperationOptions = {}
   ): Promise<BrowserEntry> {
+    assertSafeBrowserName(name);
     const profileDir = path.join(this.baseDir, name, "chromium-profile");
     await this.dependencies.mkdir(profileDir, { recursive: true });
 
