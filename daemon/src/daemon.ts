@@ -5,6 +5,7 @@ import path from "node:path";
 import { BrowserManager } from "./browser-manager.js";
 import { executeRequest } from "./execute-request.js";
 import { formatError } from "./format-error.js";
+import { IdleBrowserReaper } from "./idle-browser-reaper.js";
 import { createKeyedLock, createMutex } from "./lock.js";
 import {
   getBrowsersDir,
@@ -52,6 +53,11 @@ const startedAt = Date.now();
 const withBrowserLock = createKeyedLock<string>();
 const withInstallLock = createMutex();
 const clients = new Set<net.Socket>();
+const idleReaper = new IdleBrowserReaper({
+  listBrowsers: () => manager.listBrowsers(),
+  stopBrowser: (name) => manager.stopBrowser(name),
+  withBrowserLock,
+});
 
 let server: net.Server | null = null;
 let shuttingDown: Promise<void> | null = null;
@@ -132,46 +138,51 @@ function createMessageQueue(socket: net.Socket) {
 }
 
 async function handleExecute(socket: net.Socket, request: ExecuteRequest): Promise<void> {
-  await executeRequest(
-    request,
-    request.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS,
-    {
-      isOpen: () => !socket.destroyed && socket.writable && !socket.writableEnded,
-      onDisconnect: (listener) => {
-        const onDisconnect = () => listener();
-        socket.once("close", onDisconnect);
-        socket.once("error", onDisconnect);
-        return () => {
-          socket.off("close", onDisconnect);
-          socket.off("error", onDisconnect);
-        };
+  idleReaper.requestStarted(request.browser);
+  try {
+    await executeRequest(
+      request,
+      request.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS,
+      {
+        isOpen: () => !socket.destroyed && socket.writable && !socket.writableEnded,
+        onDisconnect: (listener) => {
+          const onDisconnect = () => listener();
+          socket.once("close", onDisconnect);
+          socket.once("error", onDisconnect);
+          return () => {
+            socket.off("close", onDisconnect);
+            socket.off("error", onDisconnect);
+          };
+        },
+        send: (message) => writeMessage(socket, message),
       },
-      send: (message) => writeMessage(socket, message),
-    },
-    {
-      withBrowserLock,
-      prepareBrowser: async (currentRequest, context) => {
-        const operation = { deadline: context.deadline, signal: context.signal };
-        if (currentRequest.connect === "auto") {
-          await manager.autoConnect(currentRequest.browser, operation);
-        } else if (currentRequest.connect) {
-          await manager.connectBrowser(currentRequest.browser, currentRequest.connect, operation);
-        } else {
-          await manager.ensureBrowser(currentRequest.browser, {
-            headless: currentRequest.headless,
-            ignoreHTTPSErrors: currentRequest.ignoreHTTPSErrors,
-            ...operation,
+      {
+        withBrowserLock,
+        prepareBrowser: async (currentRequest, context) => {
+          const operation = { deadline: context.deadline, signal: context.signal };
+          if (currentRequest.connect === "auto") {
+            await manager.autoConnect(currentRequest.browser, operation);
+          } else if (currentRequest.connect) {
+            await manager.connectBrowser(currentRequest.browser, currentRequest.connect, operation);
+          } else {
+            await manager.ensureBrowser(currentRequest.browser, {
+              headless: currentRequest.headless,
+              ignoreHTTPSErrors: currentRequest.ignoreHTTPSErrors,
+              ...operation,
+            });
+          }
+        },
+        runScript: async (currentRequest, output, context) => {
+          await runScript(currentRequest.script, manager, currentRequest.browser, output, {
+            signal: context.signal,
+            timeout: Math.max(1, context.deadline - Date.now()),
           });
-        }
-      },
-      runScript: async (currentRequest, output, context) => {
-        await runScript(currentRequest.script, manager, currentRequest.browser, output, {
-          signal: context.signal,
-          timeout: Math.max(1, context.deadline - Date.now()),
-        });
-      },
-    }
-  );
+        },
+      }
+    );
+  } finally {
+    idleReaper.requestFinished(request.browser);
+  }
 }
 
 async function handleInstall(socket: net.Socket, request: { id: string }): Promise<void> {
@@ -274,6 +285,10 @@ async function handleRequest(socket: net.Socket, line: string): Promise<void> {
 
   const { request } = parsed;
 
+  if (request.idleTimeoutMs !== undefined) {
+    idleReaper.configure(request.idleTimeoutMs);
+  }
+
   if (shuttingDown && request.type !== "stop") {
     await writeMessage(socket, {
       id: request.id,
@@ -289,10 +304,11 @@ async function handleRequest(socket: net.Socket, line: string): Promise<void> {
       return;
 
     case "browsers":
+      const browsers = manager.listBrowsers();
       await writeMessage(socket, {
         id: request.id,
         type: "result",
-        data: manager.listBrowsers(),
+        data: browsers.map((browser) => ({ ...browser, ...idleReaper.idleInfo(browser) })),
       });
       await writeMessage(socket, {
         id: request.id,
@@ -303,6 +319,7 @@ async function handleRequest(socket: net.Socket, line: string): Promise<void> {
 
     case "browser-stop":
       await withBrowserLock(request.browser, () => manager.stopBrowser(request.browser));
+      idleReaper.browserStopped(request.browser);
       await writeMessage(socket, {
         id: request.id,
         type: "result",
@@ -316,6 +333,7 @@ async function handleRequest(socket: net.Socket, line: string): Promise<void> {
       return;
 
     case "status":
+      const statusBrowsers = manager.listBrowsers();
       await writeMessage(socket, {
         id: request.id,
         type: "result",
@@ -323,8 +341,12 @@ async function handleRequest(socket: net.Socket, line: string): Promise<void> {
           pid: process.pid,
           uptimeMs: Date.now() - startedAt,
           browserCount: manager.browserCount(),
-          browsers: manager.listBrowsers(),
+          browsers: statusBrowsers.map((browser) => ({
+            ...browser,
+            ...idleReaper.idleInfo(browser),
+          })),
           socketPath: SOCKET_PATH,
+          idleTimeoutMs: idleReaper.idleTimeoutMs,
         },
       });
       await writeMessage(socket, {
@@ -365,6 +387,7 @@ async function shutdown(exitCode = 0): Promise<void> {
     const serverClosed = serverToClose ? closeServerInstance(serverToClose) : Promise.resolve();
 
     await manager.stopAll();
+    idleReaper.dispose();
     await Promise.allSettled(Array.from(clients, (socket) => closeClientSocket(socket)));
     await serverClosed;
     // Only remove the pid file and socket path if this process successfully

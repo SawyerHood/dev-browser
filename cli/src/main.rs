@@ -1,8 +1,10 @@
+mod config;
 mod connection;
 mod daemon;
 mod skill;
 
 use clap::{CommandFactory, Parser, Subcommand};
+use config::{effective_idle_timeout_ms, parse_idle_timeout};
 use connection::{connect_to_daemon, read_line, send_message};
 use daemon::{
     current_daemon_pid, ensure_daemon, install_daemon_runtime, is_daemon_running,
@@ -145,6 +147,16 @@ struct Cli {
     )]
     timeout: u32,
 
+    #[arg(
+        long,
+        global = true,
+        value_name = "DURATION",
+        value_parser = parse_idle_timeout,
+        help = "Close idle daemon-launched browsers after a duration",
+        long_help = "Close each idle daemon-launched browser after the specified duration.\n\nAccepts human-friendly values such as 30s, 5m, and 1h, or raw milliseconds. The policy is applied per named browser, preserves browser profiles, and never closes externally connected Chrome. Use 0 to disable cleanup.\n\nPrecedence: --idle-timeout, DEV_BROWSER_IDLE_TIMEOUT_MS, ~/.dev-browser/config.json idleTimeout, then disabled."
+    )]
+    idle_timeout: Option<u64>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -196,7 +208,7 @@ enum Command {
     Browsers,
     #[command(
         about = "Show daemon status",
-        long_about = "Show daemon status.\n\nPrints daemon process details, socket path, uptime, and the current set of managed browsers."
+        long_about = "Show daemon status.\n\nPrints daemon process details, socket path, uptime, the effective idle timeout, and useful per-browser idle information."
     )]
     Status,
     #[command(
@@ -213,6 +225,12 @@ struct BrowserSummary {
     kind: String,
     status: String,
     pages: Vec<String>,
+    #[serde(default, rename = "idleForMs")]
+    idle_for_ms: Option<u64>,
+    #[serde(default, rename = "idleRemainingMs")]
+    idle_remaining_ms: Option<u64>,
+    #[serde(default, rename = "activeRequests")]
+    active_requests: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +242,9 @@ struct StatusSummary {
     browser_count: usize,
     #[serde(rename = "socketPath")]
     socket_path: String,
+    #[serde(rename = "idleTimeoutMs")]
+    #[serde(default)]
+    idle_timeout_ms: u64,
     browsers: Vec<BrowserSummary>,
 }
 
@@ -255,11 +276,13 @@ fn run() -> Result<i32, Box<dyn Error>> {
             run_script(&cli, script)
         }
         Some(Command::Browsers) => {
+            let idle_timeout_ms = effective_idle_timeout_ms(cli.idle_timeout)?;
             ensure_daemon()?;
             send_request(
                 json!({
                     "id": request_id("browsers"),
                     "type": "browsers",
+                    "idleTimeoutMs": idle_timeout_ms,
                 }),
                 ResultMode::Browsers,
             )
@@ -277,11 +300,13 @@ fn run() -> Result<i32, Box<dyn Error>> {
             Ok(0)
         }
         Some(Command::Status) => {
+            let idle_timeout_ms = effective_idle_timeout_ms(cli.idle_timeout)?;
             ensure_daemon()?;
             send_request(
                 json!({
                     "id": request_id("status"),
                     "type": "status",
+                    "idleTimeoutMs": idle_timeout_ms,
                 }),
                 ResultMode::Status,
             )
@@ -326,6 +351,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
 }
 
 fn run_script(cli: &Cli, script: String) -> Result<i32, Box<dyn Error>> {
+    let idle_timeout_ms = effective_idle_timeout_ms(cli.idle_timeout)?;
     ensure_daemon()?;
 
     let timeout_ms = u64::from(cli.timeout)
@@ -338,6 +364,7 @@ fn run_script(cli: &Cli, script: String) -> Result<i32, Box<dyn Error>> {
         "browser": cli.browser,
         "script": script,
         "timeoutMs": timeout_ms,
+        "idleTimeoutMs": idle_timeout_ms,
     });
 
     if cli.headless {
@@ -481,13 +508,45 @@ fn print_status(data: &Value) -> Result<(), Box<dyn Error>> {
     println!("PID: {}", status.pid);
     println!("Uptime: {}", format_duration_ms(status.uptime_ms));
     println!("Browsers: {}", status.browser_count);
+    println!(
+        "Idle timeout: {}",
+        if status.idle_timeout_ms == 0 {
+            "disabled".to_string()
+        } else {
+            format_duration_ms(status.idle_timeout_ms)
+        }
+    );
     println!("Socket: {}", status.socket_path);
 
     if !status.browsers.is_empty() {
         let managed = status
             .browsers
             .iter()
-            .map(|browser| format!("{} ({}, {})", browser.name, browser.kind, browser.status))
+            .map(|browser| {
+                let idle = if browser.kind == "connected" {
+                    "idle cleanup exempt".to_string()
+                } else if browser.active_requests > 0 {
+                    format!("{} active request(s)", browser.active_requests)
+                } else if status.idle_timeout_ms == 0 {
+                    match browser.idle_for_ms {
+                        Some(idle_for_ms) => format!("idle {}", format_duration_ms(idle_for_ms)),
+                        None => "idle time unavailable".to_string(),
+                    }
+                } else {
+                    match (browser.idle_for_ms, browser.idle_remaining_ms) {
+                        (Some(idle_for_ms), Some(remaining_ms)) => format!(
+                            "idle {}, closes in {}",
+                            format_duration_ms(idle_for_ms),
+                            format_duration_ms(remaining_ms)
+                        ),
+                        _ => "idle time unavailable".to_string(),
+                    }
+                };
+                format!(
+                    "{} ({}, {}, {})",
+                    browser.name, browser.kind, browser.status, idle
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         println!("Managed: {managed}");
@@ -527,4 +586,26 @@ fn format_duration_ms(duration_ms: u64) -> String {
     let minutes = total_seconds / 60;
     let seconds = total_seconds % 60;
     format!("{minutes}m {seconds}s")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_timeout_is_global_and_accepts_human_friendly_values() {
+        let before =
+            Cli::try_parse_from(["dev-browser", "--idle-timeout", "5m", "status"]).unwrap();
+        assert_eq!(before.idle_timeout, Some(300_000));
+
+        let after =
+            Cli::try_parse_from(["dev-browser", "status", "--idle-timeout", "30s"]).unwrap();
+        assert_eq!(after.idle_timeout, Some(30_000));
+    }
+
+    #[test]
+    fn idle_timeout_zero_is_accepted() {
+        let cli = Cli::try_parse_from(["dev-browser", "--idle-timeout", "0", "status"]).unwrap();
+        assert_eq!(cli.idle_timeout, Some(0));
+    }
 }

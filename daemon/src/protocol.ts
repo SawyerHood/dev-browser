@@ -2,6 +2,7 @@ import { z } from "zod";
 
 const RequestBaseSchema = z.object({
   id: z.string().min(1),
+  idleTimeoutMs: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
 });
 
 const ExecuteRequestSchema = RequestBaseSchema.extend({
