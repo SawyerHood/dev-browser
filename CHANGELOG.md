@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-07-14
+
 - Added configurable per-browser idle cleanup with `--idle-timeout`, `DEV_BROWSER_IDLE_TIMEOUT_MS`, and `~/.dev-browser/config.json` support. Idle cleanup preserves persistent profiles, excludes externally connected Chrome, and safely rechecks activity under the per-browser lock before closing.
 
 ## [0.2.8] - 2026-06-05

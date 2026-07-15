@@ -1,57 +1,98 @@
 # Releasing dev-browser
 
-## First Time Setup
+## First-Time Setup
 
-### 1. npm authentication
-```bash
-npm login
-```
+npm publishing uses GitHub Actions trusted publishing (OIDC), so the release
+workflow does not need an `NPM_TOKEN`. In the npm package settings for
+`dev-browser`, configure a trusted publisher with:
 
-### 2. GitHub secrets
-Go to **GitHub repo → Settings → Secrets and variables → Actions** and add:
-- `NPM_TOKEN` — your npm access token (create at https://www.npmjs.com/settings/tokens)
+- Organization or user: `SawyerHood`
+- Repository: `dev-browser`
+- Workflow filename: `release.yml`
+
+The workflow needs `id-token: write`, which is already configured in
+`.github/workflows/release.yml`.
 
 ## Publishing a New Version
 
-### 1. Bump the version
-```bash
-node scripts/sync-version.js 0.2.0
-```
-This updates both `package.json` and `cli/Cargo.toml`.
+### 1. Prepare the release
 
-### 2. Commit
-```bash
-git add -A && git commit -m "release: v0.2.0"
-```
+Start from an up-to-date `main` branch with a clean working tree. Move the
+relevant entries from `Unreleased` into a dated version section in
+`CHANGELOG.md`, then bump the version:
 
-### 3. Tag and push
 ```bash
-git tag v0.2.0
-git push && git push --tags
+npm version 0.2.9 --no-git-tag-version
 ```
 
-The GitHub Actions release workflow triggers automatically and:
-1. Cross-compiles the Rust CLI for 6 platforms (macOS ARM64/x64, Linux x64/ARM64/musl, Windows x64)
-2. Bundles the daemon and sandbox client
-3. Creates a GitHub release with all binaries attached
-4. Publishes to npm
+The npm lifecycle hook updates all version-bearing files:
 
-### 4. Verify
+- `package.json`
+- `package-lock.json`
+- `cli/Cargo.toml`
+- `cli/Cargo.lock`
+- `.claude-plugin/marketplace.json`
+
+Confirm that they all contain the intended version before tagging.
+
+### 2. Build and validate
+
+The Rust binary embeds the generated daemon bundles, so regenerate both bundles
+before building the CLI:
+
 ```bash
-npm info dev-browser version    # should show 0.2.0
-npm install -g dev-browser      # test the install
-dev-browser --help              # verify it works
+cd daemon
+pnpm install
+pnpm bundle
+pnpm bundle:sandbox-client
+npx tsc --noEmit
+pnpm vitest run
+cd ../cli
+cargo build
+cd ..
 ```
 
-## Quick Patch Release
+Also confirm that the normal CI checks for `main` are green before publishing.
 
-Same flow, just use a patch version:
+### 3. Commit
+
 ```bash
-node scripts/sync-version.js 0.1.1
-git add -A && git commit -m "release: v0.1.1"
-git tag v0.1.1
-git push && git push --tags
+git add -A
+git commit -m "release: v0.2.9"
 ```
+
+### 4. Merge, tag, and push
+
+Merge the release commit to `main`, update the local branch, and create the tag
+on the resulting `main` commit. The tag must exactly match the version in
+`package.json`:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git tag v0.2.9
+git push origin v0.2.9
+```
+
+Pushing any `v*` tag triggers the GitHub Actions release workflow. Do not push
+the tag until the release commit is merged and CI is green: the workflow does
+not independently verify that the tag and package versions match.
+
+### 5. Monitor and verify
+
+Wait for the `Release` workflow to finish, then verify both distribution
+channels:
+
+```bash
+gh run list --workflow release.yml --limit 1
+npm info dev-browser version
+npm install -g dev-browser
+dev-browser --version
+dev-browser --help
+```
+
+If publishing fails after npm accepts the version, do not reuse that version;
+fix the release workflow and publish a new patch version.
 
 ## What the CI Does
 
@@ -59,11 +100,11 @@ See `.github/workflows/release.yml`. On tag push (`v*`):
 
 | Step | What happens |
 |------|-------------|
-| **Build** | Cross-compiles Rust CLI for each platform target |
-| **Bundle** | Runs `pnpm run bundle` and `pnpm run bundle:sandbox-client` in `daemon/` |
+| **Bundle** | Runs `pnpm bundle` and `pnpm bundle:sandbox-client` in `daemon/` |
+| **Build** | Cross-compiles the Rust CLI for each platform target, embedding the generated daemon bundles |
 | **Assemble** | Copies bin wrapper, postinstall, daemon bundles, README, LICENSE into publish dir |
-| **Publish npm** | `npm publish` from the assembled directory |
-| **GitHub Release** | Creates a release with platform binaries attached |
+| **Publish npm** | Uses OIDC trusted publishing to run `npm publish` from the assembled directory |
+| **GitHub Release** | Creates a release with generated notes and the platform binaries attached |
 
 ## Platform Binaries
 
