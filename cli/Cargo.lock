@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "dev-browser"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "clap",
  "dialoguer",
