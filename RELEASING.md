@@ -87,7 +87,6 @@ channels:
 gh run list --workflow release.yml --limit 1
 npm info dev-browser version
 npm install -g dev-browser
-dev-browser --version
 dev-browser --help
 ```
 
