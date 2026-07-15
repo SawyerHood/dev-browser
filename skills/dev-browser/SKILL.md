@@ -17,3 +17,5 @@ dev-browser install
 ## Usage
 
 Run `dev-browser --help` to learn more.
+
+Named daemon-launched browsers persist by default. For unattended work, `--idle-timeout 5m` closes each launched browser after inactivity while preserving its profile and login state. The setting never closes Chrome attached with `--connect`; use `--idle-timeout 0` to disable configured cleanup.

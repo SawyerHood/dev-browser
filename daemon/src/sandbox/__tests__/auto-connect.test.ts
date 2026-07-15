@@ -164,7 +164,7 @@ function createManager(
     options.fetch ??
     (vi.fn(async () => {
       throw new Error("unexpected fetch");
-    }) as typeof globalThis.fetch);
+    }) as unknown as typeof globalThis.fetch);
   const readFile =
     options.readFile ??
     (vi.fn(async (filePath: string) => {
@@ -406,7 +406,7 @@ describe("BrowserManager auto-connect", () => {
 
       throw createEnoentError(filePath);
     });
-    const fetch = vi.fn() as typeof globalThis.fetch;
+    const fetch = vi.fn() as unknown as typeof globalThis.fetch;
     const { manager } = createManager({ fetch, homedir: () => homeDir, readFile });
 
     await expect(getInternals(manager).discoverChrome()).resolves.toBe(websocketUrl);
@@ -482,7 +482,7 @@ describe("BrowserManager auto-connect", () => {
           },
         }
       );
-    }) as typeof globalThis.fetch;
+    }) as unknown as typeof globalThis.fetch;
     const { manager } = createManager({
       connectOverCDP,
       fetch,
@@ -580,7 +580,7 @@ describe("BrowserManager auto-connect", () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       expect(String(input)).toBe("http://127.0.0.1:9222/json/version");
       return new Response("not found", { status: 404 });
-    }) as typeof globalThis.fetch;
+    }) as unknown as typeof globalThis.fetch;
     const readFile = vi.fn(async (filePath: string) => {
       if (filePath === devToolsPath) {
         return "9222\n/devtools/browser/from-active-port\n";
@@ -613,7 +613,7 @@ describe("BrowserManager auto-connect", () => {
     });
     const fetch = vi.fn(
       async () => new Response("not found", { status: 404 })
-    ) as typeof globalThis.fetch;
+    ) as unknown as typeof globalThis.fetch;
     const { manager } = createManager({
       fetch,
       homedir: () => homeDir,
@@ -674,7 +674,7 @@ describe("BrowserManager auto-connect", () => {
       }
 
       throw new Error("connection refused");
-    }) as typeof globalThis.fetch;
+    }) as unknown as typeof globalThis.fetch;
     const readFile = vi.fn(async (filePath: string) => {
       throw createEnoentError(filePath);
     });
@@ -745,7 +745,7 @@ describe("BrowserManager auto-connect", () => {
       }
 
       throw new Error("connection refused");
-    }) as typeof globalThis.fetch;
+    }) as unknown as typeof globalThis.fetch;
     const readFile = vi.fn(async (filePath: string) => {
       if (filePath === devToolsPath) {
         return "9222\n/devtools/browser/from-active-port\n";
@@ -777,7 +777,7 @@ describe("BrowserManager auto-connect", () => {
     });
     const fetch = vi.fn(async () => {
       throw new Error("connection refused");
-    }) as typeof globalThis.fetch;
+    }) as unknown as typeof globalThis.fetch;
     const { manager } = createManager({
       fetch,
       readFile,
@@ -794,7 +794,7 @@ describe("BrowserManager auto-connect", () => {
     });
     const fetch = vi.fn(async () => {
       throw new Error("connection refused");
-    }) as typeof globalThis.fetch;
+    }) as unknown as typeof globalThis.fetch;
     const { manager } = createManager({
       fetch,
       platform: "win32",
