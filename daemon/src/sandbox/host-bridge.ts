@@ -7,6 +7,7 @@ import {
   type RootDispatcherLike,
   createPlaywright,
 } from "./playwright-internals.js";
+import { checkProtocolMessage, formatPolicyError } from "./sandbox-policy.js";
 
 export interface HostBridgeOptions {
   sendToSandbox: (json: string) => void;
@@ -52,7 +53,25 @@ export class HostBridge {
   }
 
   async receiveFromSandbox(json: string): Promise<void> {
-    await this.dispatcherConnection.dispatch(JSON.parse(json) as Record<string, unknown>);
+    const message = JSON.parse(json) as Record<string, unknown>;
+    const violation = checkProtocolMessage(message);
+    if (violation) {
+      const id = typeof message.id === "number" ? message.id : 0;
+      this.sendToSandbox(
+        JSON.stringify({
+          id,
+          error: {
+            error: {
+              name: "Error",
+              message: formatPolicyError(violation),
+              stack: "",
+            },
+          },
+        })
+      );
+      return;
+    }
+    await this.dispatcherConnection.dispatch(message);
   }
 
   async stopPendingOperations(error: Error): Promise<void> {
