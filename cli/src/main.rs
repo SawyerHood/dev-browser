@@ -212,10 +212,16 @@ enum Command {
     )]
     Status,
     #[command(
-        about = "Stop the daemon and all browsers",
-        long_about = "Stop the daemon and all browsers.\n\nThis stops the background daemon process and closes every browser instance it currently manages."
+        about = "Stop the daemon, or a single managed browser",
+        long_about = "Stop the daemon and all browsers, or stop a single named browser.\n\nWithout an argument, stops the background daemon process and closes every browser instance it currently manages.\n\nWith a NAME argument, stops only that named browser instance while leaving the daemon and other browsers running. Use `dev-browser browsers` to find the name.\n\nStopping an unknown name is a no-op."
     )]
-    Stop,
+    Stop {
+        #[arg(
+            value_name = "NAME",
+            help = "Optional name of a managed browser to stop. Without this, stops the daemon and all browsers."
+        )]
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -311,10 +317,27 @@ fn run() -> Result<i32, Box<dyn Error>> {
                 ResultMode::Status,
             )
         }
-        Some(Command::Stop) => {
+        Some(Command::Stop { name }) => {
             if !is_daemon_running() {
                 println!("Daemon is not running.");
                 return Ok(0);
+            }
+
+            if let Some(name) = name {
+                let exit_code = send_request(
+                    json!({
+                        "id": request_id("browser-stop"),
+                        "type": "browser-stop",
+                        "browser": name,
+                    }),
+                    ResultMode::None,
+                )?;
+
+                if exit_code == 0 {
+                    println!("Stopped browser '{name}'.");
+                }
+
+                return Ok(exit_code);
             }
 
             let daemon_pid = current_daemon_pid();
