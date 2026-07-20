@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { BrowserManager } from "./browser-manager.js";
 import { removeDirectoryWithRetries } from "./test-cleanup.js";
@@ -102,6 +102,39 @@ describe.sequential("BrowserManager page discovery", () => {
     expect(
       (await manager.listPages(browserName)).filter((page) => page.title === "Target Tab")
     ).toHaveLength(1);
+  }, 120_000);
+
+  it("uses stable page ids without CDP target attachment for connected browsers", async () => {
+    await ensureBrowser();
+
+    const entry = manager.getBrowser(browserName)!;
+    entry.type = "connected";
+    const existingPage = await manager.newPage(browserName);
+    await existingPage.goto(createDataUrl("Restricted CDP", "<p>existing tab</p>"));
+    const newCDPSession = vi.spyOn(existingPage.context(), "newCDPSession");
+
+    const firstSummary = (await manager.listPages(browserName)).find(
+      (page) => page.title === "Restricted CDP"
+    );
+    const secondSummary = (await manager.listPages(browserName)).find(
+      (page) => page.title === "Restricted CDP"
+    );
+
+    expect(firstSummary).toBeDefined();
+    expect(secondSummary?.id).toBe(firstSummary?.id);
+    await expect(manager.getPage(browserName, firstSummary!.id)).resolves.toBe(existingPage);
+    expect(newCDPSession).not.toHaveBeenCalled();
+
+    const otherBrowserName = `${browserName}-other`;
+    try {
+      await manager.ensureBrowser(otherBrowserName, { headless: true });
+      manager.getBrowser(otherBrowserName)!.type = "connected";
+      await expect(manager.getPage(otherBrowserName, firstSummary!.id)).resolves.not.toBe(
+        existingPage
+      );
+    } finally {
+      await manager.stopBrowser(otherBrowserName);
+    }
   }, 120_000);
 
   it("getPage with a name still returns the existing named page", async () => {

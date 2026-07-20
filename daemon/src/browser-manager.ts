@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -70,6 +71,8 @@ function isHttpEndpoint(endpoint: string): boolean {
 
 export class BrowserManager {
   private readonly browsers = new Map<string, BrowserEntry>();
+  private readonly fallbackTargetIds = new WeakMap<Page, string>();
+  private readonly pagesByFallbackTargetId = new Map<string, Page>();
   private readonly baseDir: string;
   private readonly dependencies: BrowserManagerDependencies;
 
@@ -259,7 +262,7 @@ export class BrowserManager {
     const summaries = await Promise.all(
       this.getContextPages(entry).map(
         async ({ context, page }): Promise<BrowserPageSummary | null> => {
-          const id = await this.getPageTargetId(context, page);
+          const id = await this.getPageTargetId(context, page, entry.type === "connected");
           if (!id) {
             return null;
           }
@@ -895,7 +898,21 @@ export class BrowserManager {
   }
 
   private async findPageByTargetId(entry: BrowserEntry, targetId: string): Promise<Page | null> {
-    for (const { context, page } of this.getContextPages(entry)) {
+    const contextPages = this.getContextPages(entry);
+    const fallbackPage = this.pagesByFallbackTargetId.get(targetId);
+    if (fallbackPage) {
+      if (!fallbackPage.isClosed() && contextPages.some(({ page }) => page === fallbackPage)) {
+        return fallbackPage;
+      }
+      if (fallbackPage.isClosed()) {
+        this.pagesByFallbackTargetId.delete(targetId);
+      }
+    }
+    if (entry.type === "connected") {
+      return null;
+    }
+
+    for (const { context, page } of contextPages) {
       const pageTargetId = await this.getPageTargetId(context, page);
       if (pageTargetId === targetId) {
         return page;
@@ -905,7 +922,15 @@ export class BrowserManager {
     return null;
   }
 
-  private async getPageTargetId(context: BrowserContext, page: Page): Promise<string | null> {
+  private async getPageTargetId(
+    context: BrowserContext,
+    page: Page,
+    useFallback = false
+  ): Promise<string | null> {
+    if (useFallback) {
+      return this.getFallbackTargetId(page);
+    }
+
     let session: Awaited<ReturnType<BrowserContext["newCDPSession"]>> | undefined;
 
     try {
@@ -935,5 +960,20 @@ export class BrowserManager {
     } finally {
       await session?.detach().catch(() => undefined);
     }
+  }
+
+  private getFallbackTargetId(page: Page): string {
+    let targetId = this.fallbackTargetIds.get(page);
+    if (!targetId) {
+      const generatedTargetId = randomBytes(16).toString("hex");
+      this.fallbackTargetIds.set(page, generatedTargetId);
+      this.pagesByFallbackTargetId.set(generatedTargetId, page);
+      if (typeof page.once === "function") {
+        page.once("close", () => this.pagesByFallbackTargetId.delete(generatedTargetId));
+      }
+      targetId = generatedTargetId;
+    }
+
+    return targetId;
   }
 }
