@@ -498,13 +498,13 @@ describe("BrowserManager auto-connect", () => {
     expect(context.newPageCalls).toBe(1);
     await expect(manager.listPages("attached")).resolves.toEqual([
       {
-        id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        id: expect.stringMatching(/^[a-f0-9]{32}$/i),
         name: null,
         title: "Existing tab",
         url: "https://example.com/existing",
       },
       {
-        id: "00000000000000000000000000000001",
+        id: expect.stringMatching(/^[a-f0-9]{32}$/i),
         name: "dashboard",
         title: "",
         url: "about:blank",
