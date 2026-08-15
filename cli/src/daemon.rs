@@ -158,8 +158,102 @@ fn spawn_daemon(command: &DaemonCommand) -> io::Result<()> {
         });
     }
 
-    let _child = process.spawn()?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        process.creation_flags(
+            CREATE_BREAKAWAY_FROM_JOB
+                | CREATE_NEW_PROCESS_GROUP
+                | DETACHED_PROCESS
+                | CREATE_NO_WINDOW,
+        );
+    }
+
+    match process.spawn() {
+        Ok(_) => Ok(()),
+        #[cfg(windows)]
+        Err(err) if err.raw_os_error() == Some(5) => spawn_daemon_via_wmi(command),
+        Err(err) => Err(err),
+    }
+}
+
+/// Quote one Windows process argument the way CommandLineToArgvW expects.
+fn quote_windows_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "\"\"".to_string();
+    }
+    let needs_quotes = arg.bytes().any(|b| matches!(b, b' ' | b'\t' | b'"'));
+    if !needs_quotes {
+        return arg.to_string();
+    }
+    let mut out = String::from("\"");
+    let mut backslashes = 0usize;
+    for ch in arg.chars() {
+        if ch == '\\' {
+            backslashes += 1;
+            continue;
+        }
+        if ch == '"' {
+            out.push_str(&"\\".repeat(backslashes * 2 + 1));
+            out.push('"');
+            backslashes = 0;
+            continue;
+        }
+        out.push_str(&"\\".repeat(backslashes));
+        out.push(ch);
+        backslashes = 0;
+    }
+    out.push_str(&"\\".repeat(backslashes * 2));
+    out.push('"');
+    out
+}
+
+#[cfg(windows)]
+fn windows_cmdline(command: &DaemonCommand) -> String {
+    std::iter::once(command.program.as_str())
+        .chain(command.args.iter().map(String::as_str))
+        .map(quote_windows_arg)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(windows)]
+fn spawn_daemon_via_wmi(command: &DaemonCommand) -> io::Result<()> {
+    // Agent harnesses (Claude Code, Grok Build) put the CLI in a Job Object
+    // with KILL_ON_JOB_CLOSE and without JOB_OBJECT_LIMIT_BREAKAWAY_OK.
+    // CREATE_BREAKAWAY_FROM_JOB then returns Access Denied (5). WMI
+    // Win32_Process.Create is parented by WmiPrvSE, outside that job, so
+    // the daemon survives when the agent command ends.
+    let cmdline = windows_cmdline(command).replace('\'', "''");
+    let cwd = command
+        .current_dir
+        .to_string_lossy()
+        .replace('\'', "''");
+    let script = format!(
+        "$s = ([wmiclass]'Win32_ProcessStartup'); $s.ShowWindow = 0; $r = ([wmiclass]'Win32_Process').Create('{cmdline}', '{cwd}', $s); if ($null -eq $r -or $r.ReturnValue -ne 0) {{ exit $(if ($r) {{ [int]$r.ReturnValue }} else {{ 1 }}) }}"
+    );
+    let status = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("WMI daemon spawn failed with {status}"),
+        ))
+    }
 }
 
 fn daemon_pid() -> Option<i32> {
@@ -321,4 +415,24 @@ fn run_install_command(
     };
 
     Err(reason.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quote_windows_arg;
+
+    #[test]
+    fn quote_windows_arg_leaves_simple_tokens_alone() {
+        assert_eq!(quote_windows_arg("node"), "node");
+        assert_eq!(
+            quote_windows_arg(r"C:\dev-browser\daemon.mjs"),
+            r"C:\dev-browser\daemon.mjs"
+        );
+    }
+
+    #[test]
+    fn quote_windows_arg_quotes_spaces_and_escapes_quotes() {
+        assert_eq!(quote_windows_arg("Program Files"), "\"Program Files\"");
+        assert_eq!(quote_windows_arg(r#"say "hi""#), r#""say \"hi\"""#);
+    }
 }
