@@ -78,6 +78,8 @@ dev-browser --connect
 
 Windows npm installs download the native `dev-browser-windows-x64.exe` release asset during `postinstall`, and the generated npm shims invoke that executable directly.
 
+The background daemon is started so it outlives the CLI process. On Windows that includes leaving a parent Job Object (agent harnesses such as Claude Code and Grok Build kill the job when the command ends). If `CREATE_BREAKAWAY_FROM_JOB` is denied, spawn falls back to WMI `Win32_Process.Create`.
+
 ### Using with AI agents
 
 After installing, tell your agent to run `dev-browser --help` — the help output includes the current LLM usage guide and API reference.
