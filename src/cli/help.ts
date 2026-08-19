@@ -15,9 +15,11 @@ export function topics(): string[] {
 }
 
 export function topicText(topic: string): string {
-  const text = helpText();
-  const re = new RegExp(`^## ${topic.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\b[\\s\\S]*?(?=^## |\\Z)`, "im");
-  const m = re.exec(text + "\n\\Z");
-  if (!m) return `No help topic "${topic}". Topics: ${topics().join(", ")}\n`;
-  return m[0].replace(/\n\\Z$/, "") + "\n";
+  const lines = helpText().split("\n");
+  const want = `## ${topic.toLowerCase()}`;
+  const start = lines.findIndex((l) => l.toLowerCase() === want || l.toLowerCase().startsWith(want + " "));
+  if (start < 0) return `No help topic "${topic}". Topics: ${topics().join(", ")}\n`;
+  let end = lines.findIndex((l, i) => i > start && l.startsWith("## "));
+  if (end < 0) end = lines.length;
+  return lines.slice(start, end).join("\n").replace(/\n+$/, "") + "\n";
 }

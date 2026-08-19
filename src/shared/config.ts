@@ -4,8 +4,7 @@
  * Precedence for every setting: CLI flag > environment > config.json > default.
  */
 
-import * as fs from "node:fs";
-import { paths } from "./paths.ts";
+import { paths, lazyFs } from "./paths.ts";
 
 export interface DoobieConfig {
   /** Default window mode for launched browsers. */
@@ -37,8 +36,19 @@ export const DEFAULTS = {
 
 export function loadConfig(): DoobieConfig {
   try {
-    const raw = fs.readFileSync(paths.config(), "utf8");
+    const raw = lazyFs().readFileSync(paths.config(), "utf8");
     const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed as DoobieConfig;
+  } catch {
+    /* missing or invalid config is the same as empty */
+  }
+  return {};
+}
+
+/** Same as loadConfig but via Bun.file (no node:fs on the client's hot path). */
+export async function loadConfigAsync(): Promise<DoobieConfig> {
+  try {
+    const parsed = (await Bun.file(paths.config()).json()) as unknown;
     if (parsed && typeof parsed === "object") return parsed as DoobieConfig;
   } catch {
     /* missing or invalid config is the same as empty */

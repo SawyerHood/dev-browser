@@ -90,6 +90,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<void> {
     };
     let gotHello = false;
     let handled = false;
+    let mismatched = false;
     const abort = new AbortController();
     sock.on("close", () => abort.abort());
     sock.on("error", () => abort.abort());
@@ -119,10 +120,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<void> {
             });
             send({ type: "done", exitCode: EXIT_ERROR, durationMs: 0 });
             // The client will send shutdown next; keep the socket open for it.
+            mismatched = true;
           }
           continue;
         }
         if (handled) continue;
+        // After a mismatch only `shutdown` is honored; never run a newer client's request here.
+        if (mismatched && (msg as Request).type !== "shutdown") continue;
         handled = true;
         void handle(msg as Request, send, abort.signal)
           .catch((err) => {

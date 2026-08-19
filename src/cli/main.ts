@@ -3,8 +3,6 @@
  * client must start in ~20 ms. Heavy code (daemon, Chrome download) lives in
  * the daemon bundle and is loaded with a dynamic import only when needed.
  */
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { parseArgs, UsageError, type GlobalFlags } from "./args.ts";
 import { sendRequest } from "./client.ts";
 import { OutputSink } from "./output.ts";
@@ -20,10 +18,12 @@ import {
   type RunRequest,
   type StatusPayload,
 } from "../shared/protocol.ts";
-import { DEFAULTS, loadConfig, resolveIdleTimeoutMs, formatDuration } from "../shared/config.ts";
+import { DEFAULTS, loadConfigAsync, resolveIdleTimeoutMs, formatDuration, type DoobieConfig } from "../shared/config.ts";
+import { resolvePath, basename } from "../shared/paths.ts";
 import { VERSION } from "../shared/version.ts";
 import { loadDaemonModule } from "./daemon-loader.ts";
 import { helpText, topicText } from "./help.ts";
+import { out, err as writeErr, flushAll, stdinIsTTY } from "./io.ts";
 
 export async function main(argv: string[]): Promise<number> {
   let parsed;
@@ -31,18 +31,18 @@ export async function main(argv: string[]): Promise<number> {
     parsed = parseArgs(argv);
   } catch (err) {
     if (err instanceof UsageError) {
-      process.stderr.write(`doobie: ${err.message}\n`);
+      writeErr(`doobie: ${err.message}\n`);
       return EXIT_USAGE;
     }
     throw err;
   }
   const { flags, command } = parsed;
   if (flags.version) {
-    process.stdout.write(`doobie ${VERSION}\n`);
+    out(`doobie ${VERSION}\n`);
     return EXIT_OK;
   }
   if (flags.help) {
-    process.stdout.write(helpText());
+    out(helpText());
     return EXIT_OK;
   }
 
@@ -53,7 +53,7 @@ export async function main(argv: string[]): Promise<number> {
       return new Promise(() => {}); // the daemon owns the process from here
     }
     case "help": {
-      process.stdout.write(command.topic ? topicText(command.topic) : helpText());
+      out(command.topic ? topicText(command.topic) : helpText());
       return EXIT_OK;
     }
     case "install": {
@@ -61,19 +61,23 @@ export async function main(argv: string[]): Promise<number> {
       return mod.installChrome(command.args);
     }
     case "install-skill": {
-      const { installSkill } = await import("./commands/install-skill.ts");
-      return installSkill(command.args);
+      const mod = await loadDaemonModule();
+      return mod.installSkill(command.args);
     }
     case "chrome": {
-      const { chromeCommand } = await import("./commands/chrome.ts");
-      return chromeCommand(command.args);
+      const mod = await loadDaemonModule();
+      return mod.chromeCommand(command.args);
     }
     case "status":
       return simpleRequest({ type: "status" }, flags, renderStatus);
     case "browsers":
       return simpleRequest({ type: "browsers" }, flags, renderBrowsers);
     case "pages":
-      return simpleRequest({ type: "pages", source: flags.connect !== undefined || flags.browser ? sourceFromFlags(flags) : undefined }, flags, renderPages);
+      return simpleRequest(
+        { type: "pages", source: flags.connect !== undefined || flags.browser ? sourceFromFlags(flags, await loadConfigAsync()) : undefined },
+        flags,
+        renderPages,
+      );
     case "stop":
       return simpleRequest({ type: "stop", browser: command.name }, flags, (p) => {
         const d = p as { stopped: number; daemon?: boolean };
@@ -87,12 +91,11 @@ export async function main(argv: string[]): Promise<number> {
 
 /* ------------------------------------------------------------------ */
 
-function sourceFromFlags(flags: GlobalFlags): BrowserSourceSpec {
+function sourceFromFlags(flags: GlobalFlags, config: DoobieConfig): BrowserSourceSpec {
   if (flags.connect !== undefined) {
     if (flags.connect.startsWith("unix:") || flags.connect.startsWith("pipe:")) return { kind: "socket", path: flags.connect };
     return { kind: "cdp", url: flags.connect };
   }
-  const config = loadConfig();
   const headless = flags.headless ?? config.headless ?? false;
   return { kind: "launch", name: flags.browser ?? "default", headless };
 }
@@ -100,28 +103,41 @@ function sourceFromFlags(flags: GlobalFlags): BrowserSourceSpec {
 async function readScript(flags: GlobalFlags, file?: string): Promise<{ script: string; name: string } | null> {
   if (flags.eval !== undefined) return { script: flags.eval, name: "<eval>" };
   if (file) {
-    const abs = path.resolve(file);
-    return { script: fs.readFileSync(abs, "utf8"), name: path.basename(abs) };
+    const abs = resolvePath(file);
+    let script: string;
+    try {
+      script = await Bun.file(abs).text();
+    } catch (err) {
+      throw new UsageError(`cannot read ${file}: ${(err as NodeJS.ErrnoException).code ?? (err as Error).message}`);
+    }
+    return { script, name: basename(abs) };
   }
-  if (process.stdin.isTTY) return null;
-  const chunks: Buffer[] = [];
-  for await (const c of process.stdin) chunks.push(c as Buffer);
-  return { script: Buffer.concat(chunks).toString("utf8"), name: "<stdin>" };
+  if (stdinIsTTY()) return null;
+  return { script: await Bun.stdin.text(), name: "<stdin>" };
 }
 
 async function runScriptCommand(flags: GlobalFlags, file?: string): Promise<number> {
-  const src = await readScript(flags, file);
+  let src: { script: string; name: string } | null;
+  try {
+    src = await readScript(flags, file);
+  } catch (err) {
+    if (err instanceof UsageError) {
+      writeErr(`doobie: ${err.message}\n`);
+      return EXIT_USAGE;
+    }
+    throw err;
+  }
   if (!src) {
-    process.stdout.write(helpText());
+    out(helpText());
     return EXIT_USAGE;
   }
-  const config = loadConfig();
+  const config = await loadConfigAsync();
   const timeoutSeconds = flags.timeout ?? config.timeout ?? DEFAULTS.timeoutSeconds;
   let idleTimeoutMs: number;
   try {
     idleTimeoutMs = resolveIdleTimeoutMs(flags.idleTimeout, config);
   } catch (err) {
-    process.stderr.write(`doobie: ${(err as Error).message}\n`);
+    writeErr(`doobie: ${(err as Error).message}\n`);
     return EXIT_USAGE;
   }
   const id = `${Date.now().toString(36)}-${process.pid.toString(36)}`;
@@ -130,7 +146,7 @@ async function runScriptCommand(flags: GlobalFlags, file?: string): Promise<numb
     id,
     script: src.script,
     scriptName: src.name,
-    source: sourceFromFlags(flags),
+    source: sourceFromFlags(flags, config),
     timeoutMs: Math.round(timeoutSeconds * 1000),
     idleTimeoutMs,
     quietPage: flags.quietPage,
@@ -138,10 +154,10 @@ async function runScriptCommand(flags: GlobalFlags, file?: string): Promise<numb
   };
 
   let exitCode = EXIT_ERROR;
-  const sink = new OutputSink({ cap: !flags.noCap, runId: id });
+  const sink = new OutputSink({ cap: !flags.noCap, runId: id, out, err: writeErr });
   const onFrame = (f: Frame) => {
     if (flags.json) {
-      process.stdout.write(JSON.stringify(f) + "\n");
+      out(JSON.stringify(f) + "\n");
       if (f.type === "done") exitCode = f.exitCode;
       return;
     }
@@ -175,10 +191,10 @@ async function runScriptCommand(flags: GlobalFlags, file?: string): Promise<numb
     }
   };
   try {
-    await sendRequest(req, { onFrame, idleTimeoutMs: req.timeoutMs + 15_000 });
+    await sendRequest(req, { onFrame, idleTimeoutMs: req.timeoutMs + 15_000, killOnIdle: true });
   } catch (err) {
     sink.finish();
-    process.stderr.write(`doobie: ${(err as Error).message}\n`);
+    writeErr(`doobie: ${(err as Error).message}\n`);
     return EXIT_ERROR;
   }
   sink.finish();
@@ -197,18 +213,18 @@ async function simpleRequest(
       idleTimeoutMs: 30_000,
       onFrame: (f) => {
         if (flags.json) {
-          process.stdout.write(JSON.stringify(f) + "\n");
+          out(JSON.stringify(f) + "\n");
         }
         if (f.type === "data") payload = f.payload;
-        else if (f.type === "error" && !flags.json) process.stderr.write(`${f.name}: ${f.message}\n`);
+        else if (f.type === "error" && !flags.json) writeErr(`${f.name}: ${f.message}\n`);
         else if (f.type === "done") exitCode = f.exitCode;
       },
     });
   } catch (err) {
-    process.stderr.write(`doobie: ${(err as Error).message}\n`);
+    writeErr(`doobie: ${(err as Error).message}\n`);
     return EXIT_ERROR;
   }
-  if (!flags.json && payload !== undefined) process.stdout.write(render(payload));
+  if (!flags.json && payload !== undefined) out(render(payload));
   return exitCode;
 }
 
@@ -271,12 +287,12 @@ export function exitCodeForName(name: string): number {
 export function runCli(): void {
   main(process.argv.slice(2)).then(
     (code) => {
-      process.exitCode = code;
-      // Let stdout flush, then exit (the client must not linger on open handles).
-      setTimeout(() => process.exit(code), 0);
+      flushAll();
+      process.exit(code);
     },
-    (err) => {
-      process.stderr.write(`doobie: ${(err as Error)?.stack ?? String(err)}\n`);
+    (e) => {
+      writeErr(`doobie: ${(e as Error)?.stack ?? String(e)}\n`);
+      flushAll();
       process.exit(EXIT_ERROR);
     },
   );

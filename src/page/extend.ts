@@ -3,15 +3,15 @@
  *
  * Adds: page.snapshot, page.ref, page.shot, page.waitForLoad, page.fill.
  * Changes: goto defaults to waitUntil "domcontentloaded"; default action
- * timeout 5 s and navigation timeout 15 s; `ref/` selectors work in
- * waitForSelector and locator (which use Puppeteer's isolated realm) and
- * frame-prefixed refs (`ref/f1e5`) route to the owning frame.
+ * timeout 5 s and navigation timeout 15 s; `ref/` selectors work everywhere
+ * (the ref map lives in Puppeteer's isolated realm, where custom query
+ * handlers run) and frame-prefixed refs (`ref/f1e5`) route to the owning frame.
  */
-import type { ElementHandle, Frame, GoToOptions, HTTPResponse, Page, WaitForSelectorOptions } from "puppeteer-core";
+import type { ElementHandle, GoToOptions, HTTPResponse, Page, WaitForSelectorOptions } from "puppeteer-core";
 import { DEFAULTS } from "../shared/config.ts";
 import { shot, type ShotOptions, type ShotResult } from "./shot.ts";
 import { fill } from "./fill.ts";
-import { waitForLoad, type WaitForLoadOptions, type WaitForLoadResult } from "./wait-for-load.ts";
+import { waitForLoad, installLoadTracker, type WaitForLoadOptions, type WaitForLoadResult } from "./wait-for-load.ts";
 import {
   snapshot,
   resolveRef,
@@ -41,6 +41,7 @@ export function extendPage(page: Page): DoobiePage {
   if (EXTENDED.has(page)) return page as DoobiePage;
   EXTENDED.add(page);
   registerRefQueryHandler();
+  installLoadTracker(page);
 
   const p = page as DoobiePage & Record<string, unknown>;
 
@@ -114,19 +115,14 @@ export function extendPage(page: Page): DoobiePage {
     return origWaitForSelector(selector as string, options);
   };
 
-  // locator('ref/e5'): function locator in the main realm.
+  // locator('ref/e5'): Puppeteer's string locator already understands `ref/` via the
+  // custom query handler (it runs in the isolated realm where window.__doobie lives);
+  // only frame-prefixed refs need routing to the owning frame.
   const origLocator = page.locator.bind(page);
   (p as Record<string, unknown>).locator = function (selectorOrFunc: unknown) {
-    if (typeof selectorOrFunc === "string" && selectorOrFunc.startsWith(REF_SELECTOR_PREFIX)) {
-      const ref = selectorOrFunc.slice(REF_SELECTOR_PREFIX.length);
+    if (typeof selectorOrFunc === "string") {
       const m = FRAME_REF_RE.exec(selectorOrFunc);
-      const frame: Frame = m ? resolveRefFrame(page, ref) : page.mainFrame();
-      const local = m ? m[2]! : ref;
-      // Function locators are serialized; bake the id into the function body.
-      const fn = new Function(
-        `var api = window.__doobie; return api ? api.ref(${JSON.stringify(local)}) : null;`,
-      ) as () => Element | null;
-      return frame.locator(fn as unknown as () => Element) as never;
+      if (m) return resolveRefFrame(page, m[1]! + m[2]!).locator(`ref/${m[2]}`) as never;
     }
     return origLocator(selectorOrFunc as string);
   };

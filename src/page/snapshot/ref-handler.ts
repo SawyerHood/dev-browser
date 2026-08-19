@@ -2,10 +2,10 @@
  * Puppeteer custom query handler so `ref/e5` works as a selector in
  * page.$ / click / type / hover / focus / select / $eval / $$eval.
  *
- * The handler runs inside the page (serialized), in the MAIN realm for
- * page.$-style calls. It reads the ref map installed by the in-page
- * snapshot script (window.__doobie). Frame-prefixed refs (f1e5) are not
- * handled here: extend.ts routes them to the right frame first.
+ * The handler runs inside the page (serialized) in Puppeteer's ISOLATED
+ * realm (`frame.isolatedRealm()`), which is where the snapshot installs the
+ * ref map (window.__doobie) — invisible to page scripts. Frame-prefixed refs
+ * (f1e5) are not handled here: extend.ts routes them to the right frame first.
  */
 import { Puppeteer } from "puppeteer-core";
 

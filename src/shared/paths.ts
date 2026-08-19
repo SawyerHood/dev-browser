@@ -16,34 +16,96 @@
  * DOOBIE_HOME overrides the root (tests use a temp dir).
  */
 
-import * as os from "node:os";
-import * as path from "node:path";
-import * as fs from "node:fs";
+// No top-level node:* imports here: this module is on the client's hot path
+// and `node:fs`/`node:path`/`node:os` cost several ms of startup under Bun.
+// Posix-only helpers (Windows lands after 1.0).
+
+type FsModule = typeof import("node:fs");
+let fsMod: FsModule | null = null;
+/** Lazily loaded node:fs (only slow paths need it). */
+export function lazyFs(): FsModule {
+  if (!fsMod) fsMod = require("node:fs") as FsModule;
+  return fsMod;
+}
+
+export function joinPath(...parts: string[]): string {
+  let out = "";
+  for (const part of parts) {
+    if (!part) continue;
+    if (part.startsWith("/")) out = part;
+    else out = out.length === 0 || out.endsWith("/") ? out + part : out + "/" + part;
+  }
+  return normalizePath(out);
+}
+
+export function normalizePath(p: string): string {
+  const abs = p.startsWith("/");
+  const segs: string[] = [];
+  for (const seg of p.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (segs.length > 0 && segs[segs.length - 1] !== "..") segs.pop();
+      else if (!abs) segs.push("..");
+      continue;
+    }
+    segs.push(seg);
+  }
+  const joined = segs.join("/");
+  return abs ? "/" + joined : joined || ".";
+}
+
+export function resolvePath(p: string): string {
+  if (p.startsWith("/")) return normalizePath(p);
+  return normalizePath(process.cwd() + "/" + p);
+}
+
+export function isAbsolutePath(p: string): boolean {
+  return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p);
+}
+
+export function basename(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+
+export function dirname(p: string): string {
+  const i = p.lastIndexOf("/");
+  if (i < 0) return ".";
+  if (i === 0) return "/";
+  return p.slice(0, i);
+}
+
+export function homedir(): string {
+  const h = process.env.HOME || process.env.USERPROFILE;
+  if (h && h.length > 0) return h;
+  return (require("node:os") as typeof import("node:os")).homedir();
+}
 
 export function doobieHome(): string {
   const env = process.env.DOOBIE_HOME;
-  if (env && env.length > 0) return path.resolve(env);
-  return path.join(os.homedir(), ".doobie");
+  if (env && env.length > 0) return resolvePath(env);
+  return joinPath(homedir(), ".doobie");
 }
 
 export const paths = {
   home: () => doobieHome(),
-  socket: () => process.env.DOOBIE_SOCKET || path.join(doobieHome(), "daemon.sock"),
-  pid: () => path.join(doobieHome(), "daemon.pid"),
-  lock: () => path.join(doobieHome(), "daemon.lock"),
-  log: () => path.join(doobieHome(), "daemon.log"),
-  config: () => path.join(doobieHome(), "config.json"),
-  tmp: () => path.join(doobieHome(), "tmp"),
-  browsers: () => path.join(doobieHome(), "browsers"),
-  profile: (name: string) => path.join(doobieHome(), "browsers", sanitizeName(name), "profile"),
-  pagesDir: () => path.join(doobieHome(), "pages"),
-  pagesFile: (browserKey: string) => path.join(doobieHome(), "pages", sanitizeKey(browserKey) + ".json"),
-  chromeDir: () => path.join(doobieHome(), "chrome"),
-  chromePorts: () => path.join(doobieHome(), "chrome-ports.json"),
+  socket: () => process.env.DOOBIE_SOCKET || joinPath(doobieHome(), "daemon.sock"),
+  pid: () => joinPath(doobieHome(), "daemon.pid"),
+  lock: () => joinPath(doobieHome(), "daemon.lock"),
+  log: () => joinPath(doobieHome(), "daemon.log"),
+  config: () => joinPath(doobieHome(), "config.json"),
+  tmp: () => joinPath(doobieHome(), "tmp"),
+  browsers: () => joinPath(doobieHome(), "browsers"),
+  profile: (name: string) => joinPath(doobieHome(), "browsers", sanitizeName(name), "profile"),
+  pagesDir: () => joinPath(doobieHome(), "pages"),
+  pagesFile: (browserKey: string) => joinPath(doobieHome(), "pages", sanitizeKey(browserKey) + ".json"),
+  chromeDir: () => joinPath(doobieHome(), "chrome"),
+  chromePorts: () => joinPath(doobieHome(), "chrome-ports.json"),
 };
 
 /** Ensure the home dir and its standard subdirs exist. Safe to call often. */
 export function ensureHome(): void {
+  const fs = lazyFs();
   for (const dir of [doobieHome(), paths.tmp(), paths.browsers(), paths.pagesDir()]) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
@@ -74,9 +136,9 @@ export function sanitizeKey(key: string): string {
 export function jailPath(name: string): string {
   if (typeof name !== "string" || name.length === 0) throw new Error("file name is required");
   if (name.includes("\0")) throw new Error("file name contains a null byte");
-  if (path.isAbsolute(name)) throw new Error(`file name must be relative to the tmp dir, got ${name}`);
+  if (isAbsolutePath(name)) throw new Error(`file name must be relative to the tmp dir, got ${name}`);
   if (name.includes("/") || name.includes("\\")) throw new Error(`file name must not contain path separators, got ${name}`);
   if (name === "." || name === ".." ) throw new Error(`invalid file name ${name}`);
   if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error(`file name may only contain [A-Za-z0-9._-], got ${name}`);
-  return path.join(paths.tmp(), name);
+  return joinPath(paths.tmp(), name);
 }

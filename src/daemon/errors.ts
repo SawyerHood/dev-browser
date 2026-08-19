@@ -11,17 +11,24 @@ export interface FormattedError {
 
 const MAX_FRAMES = 5;
 
-export function formatScriptError(err: unknown, scriptName: string): FormattedError {
+export interface FormatOptions {
+  /** Subtract this from columns reported on line 1 (the transform wrapper prefix). */
+  line1ColumnShift?: number;
+  /** Per-line column shifts introduced by the transform; overrides line1ColumnShift when given. */
+  columnShifts?: Record<number, number>;
+}
+
+export function formatScriptError(err: unknown, scriptName: string, opts: FormatOptions = {}): FormattedError {
   if (err === null || err === undefined) return { name: "Error", message: String(err) };
   if (typeof err !== "object") return { name: "Error", message: String(err) };
   const e = err as { name?: unknown; message?: unknown; stack?: unknown };
   const name = typeof e.name === "string" && e.name.length > 0 ? e.name : "Error";
   const message = typeof e.message === "string" ? e.message : String(err);
-  const stack = typeof e.stack === "string" ? cleanStack(e.stack, scriptName, message) : undefined;
+  const stack = typeof e.stack === "string" ? cleanStack(e.stack, scriptName, message, opts) : undefined;
   return { name, message, stack };
 }
 
-export function cleanStack(stack: string, scriptName: string, message: string): string | undefined {
+export function cleanStack(stack: string, scriptName: string, message: string, opts: FormatOptions = {}): string | undefined {
   const lines = stack.split("\n");
   // Drop the header line(s) that repeat name/message.
   let start = 0;
@@ -34,7 +41,11 @@ export function cleanStack(stack: string, scriptName: string, message: string): 
     const m = re.exec(raw);
     if (!m) continue;
     const fn = m[1] && !/^(?:async\s+)?(?:<anonymous>|eval|Object\.<anonymous>)$/.test(m[1]) ? m[1] : "";
-    frames.push(fn ? `    at ${fn} (${scriptName}:${m[2]}:${m[3]})` : `    at ${scriptName}:${m[2]}:${m[3]}`);
+    const line = m[2]!;
+    let col = Number(m[3]);
+    const shift = opts.columnShifts ? (opts.columnShifts[Number(line)] ?? 0) : line === "1" ? (opts.line1ColumnShift ?? 0) : 0;
+    if (shift) col = Math.max(1, col - shift);
+    frames.push(fn ? `    at ${fn} (${scriptName}:${line}:${col})` : `    at ${scriptName}:${line}:${col}`);
     if (frames.length >= MAX_FRAMES) break;
   }
   return frames.length > 0 ? frames.join("\n") : undefined;

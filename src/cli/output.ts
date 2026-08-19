@@ -5,10 +5,9 @@
  *
  * stderr is never capped: it carries errors and the bounded page-console block.
  */
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { DEFAULTS } from "../shared/config.ts";
-import { paths, ensureHome } from "../shared/paths.ts";
+import { paths, ensureHome, joinPath, lazyFs } from "../shared/paths.ts";
+import { out as writeOut, err as writeErr } from "./io.ts";
 
 export interface OutputSinkOptions {
   cap: boolean;
@@ -34,8 +33,8 @@ export class OutputSink {
   constructor(private readonly opts: OutputSinkOptions) {
     this.capChars = opts.capChars ?? DEFAULTS.outputCapChars;
     this.tailChars = opts.tailChars ?? DEFAULTS.outputTailChars;
-    this.out = opts.out ?? ((s) => process.stdout.write(s));
-    this.err = opts.err ?? ((s) => process.stderr.write(s));
+    this.out = opts.out ?? writeOut;
+    this.err = opts.err ?? writeErr;
   }
 
   write(stream: "stdout" | "stderr", text: string): void {
@@ -73,7 +72,8 @@ export class OutputSink {
   private openSpill(): void {
     try {
       ensureHome();
-      this.spillPath = path.join(paths.tmp(), `out-${this.opts.runId}.txt`);
+      const fs = lazyFs();
+      this.spillPath = joinPath(paths.tmp(), `out-${this.opts.runId}.txt`);
       this.spillFd = fs.openSync(this.spillPath, "w", 0o600);
       fs.writeSync(this.spillFd, this.streamed);
     } catch {
@@ -85,7 +85,7 @@ export class OutputSink {
   private spill(text: string): void {
     if (this.spillFd === null) return;
     try {
-      fs.writeSync(this.spillFd, text);
+      lazyFs().writeSync(this.spillFd, text);
     } catch {
       /* ignore */
     }
@@ -95,7 +95,7 @@ export class OutputSink {
     if (!this.capped) return;
     if (this.spillFd !== null) {
       try {
-        fs.closeSync(this.spillFd);
+        lazyFs().closeSync(this.spillFd);
       } catch {
         /* ignore */
       }

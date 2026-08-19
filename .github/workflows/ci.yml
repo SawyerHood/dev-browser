@@ -1,0 +1,28 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun x tsc --noEmit
+      - name: Install Chrome for Testing
+        run: bun x @puppeteer/browsers install chrome@stable --path $HOME/.doobie/chrome
+      - run: bun run build
+      - run: bun test
+        env:
+          DOOBIE_TEST_TIMEOUT: "120000"
+      - name: Benchmarks (Linux only)
+        if: runner.os == 'Linux'
+        run: bun run bench/run.ts --check --bin dist/doobie

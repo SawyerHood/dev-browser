@@ -2,8 +2,9 @@
  * ARIA snapshot with refs. PUBLIC CONTRACT — implemented in ./snapshot.ts.
  *
  * Design (settled):
- * - An in-page script (INPAGE_SCRIPT from ./inpage.ts) runs in the MAIN realm
- *   of a frame and installs `window.__doobie` with:
+ * - An in-page script (INPAGE_SCRIPT from ./inpage.ts) runs in Puppeteer's
+ *   ISOLATED realm of a frame (`frame.isolatedRealm()`, where custom query
+ *   handlers execute; invisible to page scripts) and installs `window.__doobie` with:
  *     snapshot(opts) -> { yaml: string, refs: number, truncated: boolean, iframes: Array<{ ref: string }> }
  *     ref(id)        -> Element | null          (id like "e12", stable within a document)
  *     box(id)        -> [x, y, w, h] | null     (viewport-relative CSS px)

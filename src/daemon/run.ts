@@ -123,19 +123,51 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
     return { exitCode: EXIT_ERROR };
   }
 
-  // ---- deadline + disconnect
-  let deadlineReject: (e: Error) => void = () => {};
-  const deadlinePromise = new Promise<never>((_, rej) => {
-    deadlineReject = rej;
-  });
-  const timer = setTimeout(() => deadlineReject(new DeadlineError(Math.round(req.timeoutMs / 1000))), remaining());
-  const onAbort = () => deadlineReject(new AbortedError());
-  ctx.signal.addEventListener("abort", onAbort, { once: true });
-
   const touched = new Map<Page, { name: string | null }>();
   const pageLines: string[] = [];
   const listeners: Array<() => void> = [];
   let entry: BrowserEntry | null = null;
+
+  // ---- outcome: resolved exactly once, by the normal path, the client going
+  // away, or the deadline timer. The timer is the authority for the deadline so
+  // that a script whose promise chain never settles still ends the run.
+  let resolveOutcome: (o: RunOutcome) => void = () => {};
+  const outcome = new Promise<RunOutcome>((res) => {
+    resolveOutcome = res;
+  });
+  let deadlineReject: (e: Error) => void = () => {};
+  const deadlinePromise = new Promise<never>((_, rej) => {
+    deadlineReject = rej;
+  });
+  deadlinePromise.catch(() => {});
+  const cleanup = () => {
+    clearTimeout(timer);
+    ctx.signal.removeEventListener("abort", onAbort);
+    for (const off of listeners) off();
+    if (pageLines.length > 0) stderr(pageLines.join("\n") + "\n");
+    if (entry) {
+      entry.activeRuns = Math.max(0, entry.activeRuns - 1);
+      ctx.manager.touch(entry);
+    }
+  };
+  const finish = (exitCode: number) => {
+    if (finished) return;
+    cleanup();
+    finished = true;
+    resolveOutcome({ exitCode });
+  };
+  const timer = setTimeout(() => {
+    const err = new DeadlineError(Math.round(req.timeoutMs / 1000));
+    deadlineReject(err);
+    if (finished) return;
+    void buildErrorFrame(err, req.scriptName, touched, 0, transformed.columnShifts).then((frame) => {
+      if (finished) return;
+      emit(frame);
+      finish(EXIT_TIMEOUT);
+    });
+  }, remaining());
+  const onAbort = () => deadlineReject(new AbortedError());
+  ctx.signal.addEventListener("abort", onAbort, { once: true });
 
   const track = (page: Page, name: string | null) => {
     if (touched.has(page)) return;
@@ -163,8 +195,7 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
     });
   };
 
-  let exitCode = EXIT_OK;
-  try {
+  void (async () => {
     // ---- browser
     entry = await Promise.race([
       ctx.manager.get(req.source, { timeoutMs: remaining(), idleTimeoutMs: req.idleTimeoutMs }),
@@ -242,31 +273,29 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
     const context = vm.createContext(sandbox, { name: "doobie-script" });
 
     // ---- run
+    // No vm `timeout`: Bun's watchdog terminates async continuations in a way
+    // that abandons promise chains and can wedge the event loop. A synchronous
+    // infinite loop therefore blocks the daemon; the client's watchdog kills a
+    // daemon that misses its deadline by 15 s and the next call restarts it.
     const fn = vm.runInContext(transformed.code, context, {
       filename: req.scriptName,
       lineOffset: transformed.lineOffset,
-      timeout: Math.min(remaining(), 2_000_000_000),
     }) as () => Promise<unknown>;
     const value = await Promise.race([withRun({ id: req.id, emit }, () => fn()), deadlinePromise]);
     const formatted = formatResult(value);
     if (formatted !== undefined) emit({ type: "result", value: formatted });
-  } catch (err) {
-    exitCode = EXIT_ERROR;
-    const frame = await buildErrorFrame(err, req.scriptName, touched, remaining());
-    if (frame.kind === "timeout") exitCode = EXIT_TIMEOUT;
-    emit(frame);
-  } finally {
-    clearTimeout(timer);
-    ctx.signal.removeEventListener("abort", onAbort);
-    for (const off of listeners) off();
-    if (pageLines.length > 0) stderr(pageLines.join("\n") + "\n");
-    if (entry) {
-      entry.activeRuns = Math.max(0, entry.activeRuns - 1);
-      ctx.manager.touch(entry);
-    }
-    finished = true;
-  }
-  return { exitCode };
+    return EXIT_OK;
+  })().then(
+    (code) => finish(code),
+    async (err) => {
+      if (err instanceof DeadlineError) return; // the timer owns the timeout frame
+      const frame = await buildErrorFrame(err, req.scriptName, touched, remaining(), transformed.columnShifts);
+      if (finished) return;
+      emit(frame);
+      finish(EXIT_ERROR);
+    },
+  );
+  return outcome;
 }
 
 class AbortedError extends Error {
@@ -285,6 +314,7 @@ async function buildErrorFrame(
   scriptName: string,
   touched: Map<Page, { name: string | null }>,
   remainingMs: number,
+  columnShifts: Record<number, number> = {},
 ): Promise<ErrorFrame> {
   const pages = await describePages(touched, Math.min(1500, Math.max(200, remainingMs)));
   if (err instanceof DeadlineError) {
@@ -296,7 +326,7 @@ async function buildErrorFrame(
   if (err instanceof ChromeNotFoundError || err instanceof CdpConnectError) {
     return { type: "error", kind: "daemon", name: err.name, message: err.message };
   }
-  const f = formatScriptError(err, scriptName);
+  const f = formatScriptError(err, scriptName, { columnShifts });
   return { type: "error", kind: "script", name: f.name, message: f.message, stack: f.stack, pages };
 }
 

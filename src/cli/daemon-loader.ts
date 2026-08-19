@@ -10,6 +10,8 @@
 export interface DaemonModule {
   startDaemon(opts?: { socketPath?: string }): Promise<void>;
   installChrome(args: string[]): Promise<number>;
+  installSkill(args: string[]): Promise<number>;
+  chromeCommand(args: string[]): Promise<number>;
 }
 
 declare global {

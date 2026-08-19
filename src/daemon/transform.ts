@@ -14,7 +14,18 @@ export interface TransformResult {
   code: string;
   /** Pass to vm as lineOffset so stack lines match the user's script. */
   lineOffset: number;
+  /** Columns reported on line 1 are shifted right by this many chars (the wrapper prefix). */
+  line1ColumnShift: number;
+  /** Per-line column shifts introduced by the transform (line 1 wrapper, `return (` on the last statement's line). */
+  columnShifts: Record<number, number>;
 }
+
+/**
+ * The wrapper shares line 1 with the user's first line (instead of adding a
+ * line and passing lineOffset -1) because Bun's vm ignores negative offsets.
+ */
+export const WRAPPER_PREFIX = "(async () => {";
+const RETURN_PREFIX = "return (";
 
 export class ScriptSyntaxError extends SyntaxError {
   constructor(message: string, readonly line?: number, readonly column?: number) {
@@ -33,6 +44,8 @@ interface ProgramNode extends Node {
 }
 
 export function transformScript(src: string): TransformResult {
+  // vm does not accept a hashbang; acorn does. Same length, so positions hold.
+  if (src.startsWith("#!")) src = "//" + src.slice(2);
   let program: ProgramNode;
   try {
     program = parse(src, {
@@ -52,11 +65,16 @@ export function transformScript(src: string): TransformResult {
   }
 
   let body = src;
+  const columnShifts: Record<number, number> = { 1: WRAPPER_PREFIX.length };
   const last = program.body[program.body.length - 1];
-  if (last && last.type === "ExpressionStatement" && last.directive === undefined && last.expression) {
+  // A lone string literal parses as a directive ("use strict"); still return it
+  // unless it really is "use strict" (e.g. `doobie -e '"hello"'` prints hello).
+  if (last && last.type === "ExpressionStatement" && last.expression && last.directive !== "use strict") {
     const expr = last.expression;
     const exprText = src.slice(expr.start, expr.end);
-    body = src.slice(0, last.start) + "return (" + exprText + "\n);" + src.slice(last.end);
+    body = src.slice(0, last.start) + RETURN_PREFIX + exprText + "\n);" + src.slice(last.end);
+    const line = (last as Node & { loc?: { start: { line: number } } }).loc?.start.line ?? 1;
+    columnShifts[line] = (columnShifts[line] ?? 0) + RETURN_PREFIX.length;
   }
   // Imports cannot live inside a function body; explain instead of a cryptic error.
   for (const stmt of program.body) {
@@ -67,5 +85,5 @@ export function transformScript(src: string): TransformResult {
       );
     }
   }
-  return { code: "(async () => {\n" + body + "\n})", lineOffset: -1 };
+  return { code: WRAPPER_PREFIX + body + "\n})", lineOffset: 0, line1ColumnShift: WRAPPER_PREFIX.length, columnShifts };
 }

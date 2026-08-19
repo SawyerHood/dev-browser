@@ -47,6 +47,7 @@ export class UsageError extends Error {
   }
 }
 
+const PASSTHROUGH = new Set(["install", "install-skill", "chrome"]);
 const SUBCOMMANDS = new Set(["run", "pages", "browsers", "status", "stop", "install", "install-skill", "chrome", "help", "daemon"]);
 
 function looksLikeConnectValue(v: string | undefined): boolean {
@@ -64,12 +65,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     const next = argv[i + 1];
-    const takeValue = (name: string): string => {
-      if (next === undefined || (next.startsWith("-") && next !== "-")) throw new UsageError(`${name} requires a value`);
+    const takeValue = (name: string, allowDash = false): string => {
+      if (next === undefined || (!allowDash && next.startsWith("-") && next !== "-")) {
+        throw new UsageError(`${name} requires a value`);
+      }
       i++;
       return next;
     };
-    if (command && command.kind !== "script") {
+    // Subcommands with their own option parser take everything after them verbatim.
+    if (command && PASSTHROUGH.has(command.kind)) {
       rest.push(a);
       continue;
     }
@@ -125,7 +129,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "-e":
       case "--eval":
-        flags.eval = takeValue(a);
+        flags.eval = takeValue(a, true); // code may start with "-" (e.g. -1)
         break;
       case "-h":
       case "--help":
@@ -177,7 +181,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
               throw new UsageError(`unknown command "${a}". Run doobie --help.`);
           }
         } else {
-          rest.push(a);
+          throw new UsageError(`unexpected argument "${a}"`);
         }
     }
   }

@@ -1,5 +1,7 @@
 ref/
 node_modules/
 dist/
-.doobie-test/
+build/
+bin/doobie-bin
 *.log
+.DS_Store
