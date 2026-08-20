@@ -133,3 +133,11 @@ describe("LineDecoder", () => {
     expect(d.push(encodeFrame({ type: "done", exitCode: 0 }))).toEqual([{ type: "done", exitCode: 0 }]);
   });
 });
+
+test("jailPath accepts downloads/<name> and nothing deeper", async () => {
+  const { jailPath, paths } = await import("../../src/shared/paths.ts");
+  expect(jailPath("downloads/report (1).csv")).toBe(`${paths.tmp()}/downloads/report (1).csv`);
+  expect(() => jailPath("downloads/../x")).toThrow();
+  expect(() => jailPath("downloads/a/b")).toThrow();
+  expect(() => jailPath("other/x")).toThrow();
+});

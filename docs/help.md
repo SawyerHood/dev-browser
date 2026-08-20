@@ -104,7 +104,7 @@ FLAGS
   browser take turns under a per-browser lock; a long action such as type({ delay }) delays the other tab). Pages from
   Puppeteer itself (page.browser().newPage(), popups) get the doobie helpers too; with --connect only tabs you touch
   (getPage, newPage, their popups) are extended — the user's other tabs keep their dialogs and scripts. Downloads from
-  launched browsers land in ~/.doobie/tmp/downloads/<name> (not readable via readFile: use the shell); attached browsers
+  launched browsers land in ~/.doobie/tmp/downloads/<name> (readFile("downloads/<name>") reads them); attached browsers
   keep Chrome's download dir. goto() of an attachment URL throws net::ERR_ABORTED although the file still lands.
 
 ## snapshot
@@ -147,7 +147,7 @@ FLAGS
   acting selector methods alike): `Ref "e5" is stale or unknown. Take a new page.snapshot() and use a fresh ref. (cause:
   No element found for selector: ref/e5)` (or `Frame f1 ... is gone.`). Exceptions: page.$/$$ return null/[] (check
   before use); page.locator("ref/e5") only reports `Timed out after waiting Nms`; waitForSelector("ref/e5") throws a
-  plain Error `Waiting for selector \`ref/e5\` failed: Nms exceeded` (name "Error", not TimeoutError).
+  TimeoutError `Waiting for selector \`ref/e5\` failed: Waiting failed: Nms exceeded` like CSS selectors.
   After any navigation or big DOM change: re-snapshot, then use fresh refs. Refs from the old document never act on
   the new one. Known pages with stable CSS selectors: skip the snapshot and use them directly.
 
@@ -180,8 +180,8 @@ FLAGS
   page.type(sel, text)                append keystrokes.      page.select(sel, value)   choose <select> options.
   page.click(sel, { count: 2 })       double-click.           page.keyboard.press("Enter") / .down("Shift") / .type(s).
   page.$eval(sel, el => el.value)     read a value.           (await page.ref("e7")).uploadFile("/abs/path") for files
-                                      (missing files pass silently). ABSOLUTE paths for every file option: uploadFile,
-                                      screenshot({ path }), pdf({ path }) resolve relative paths against the daemon's cwd.
+                                      (missing files pass silently). Relative paths in uploadFile, screenshot({ path })
+                                      and pdf({ path }) resolve against YOUR shell's cwd (the daemon rewrites them).
   No key chords ("Control+a" -> Unknown key): keyboard.down("Control"); keyboard.press("a"); keyboard.up("Control")
   (all awaited; "Meta" on macOS). Dialogs (alert/confirm/prompt) are auto-dismissed and reported as `[page:NAME] dialog
   alert: msg (auto-dismissed)`; beforeunload is accepted (`(auto-accepted)`, the navigation proceeds). Register

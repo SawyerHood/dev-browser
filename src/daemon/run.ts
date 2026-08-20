@@ -629,7 +629,7 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
       filename: req.scriptName,
       lineOffset: transformed.lineOffset,
     }) as () => Promise<unknown>;
-    const value = await Promise.race([withRun({ id: req.id, emit, gate }, () => fn()), deadlinePromise]);
+    const value = await Promise.race([withRun({ id: req.id, emit, gate, cwd: req.cwd }, () => fn()), deadlinePromise]);
     const rendered = renderResult(value);
     if (rendered !== undefined) {
       const frame: ResultFrame & { data?: unknown } = { type: "result", value: rendered.text };

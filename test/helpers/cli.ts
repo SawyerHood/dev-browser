@@ -13,7 +13,7 @@ export interface CliResult {
 
 export interface CliEnv {
   home: string;
-  run(args: string[], opts?: { stdin?: string; timeoutMs?: number; env?: Record<string, string> }): Promise<CliResult>;
+  run(args: string[], opts?: { stdin?: string; timeoutMs?: number; env?: Record<string, string>; cwd?: string }): Promise<CliResult>;
   /** Stop the daemon and delete the home dir. */
   cleanup(): Promise<void>;
 }
@@ -27,10 +27,10 @@ export function makeCliEnv(prefix = "doobie-test-"): CliEnv {
   delete baseEnv.NODE_PATH;
   const run = async (
     args: string[],
-    opts: { stdin?: string; timeoutMs?: number; env?: Record<string, string> } = {},
+    opts: { stdin?: string; timeoutMs?: number; env?: Record<string, string>; cwd?: string } = {},
   ): Promise<CliResult> => {
     const proc = Bun.spawn([process.execPath, MAIN, ...args], {
-      cwd: ROOT,
+      cwd: opts.cwd ?? ROOT,
       env: { ...baseEnv, ...(opts.env ?? {}) },
       stdin: opts.stdin !== undefined ? new TextEncoder().encode(opts.stdin) : "ignore",
       stdout: "pipe",

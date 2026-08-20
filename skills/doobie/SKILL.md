@@ -25,5 +25,5 @@ doobie -e 'const p = await browser.getPage("main"); await p.click("ref/e6"); awa
 
 Gotchas: end lines with semicolons (a line starting with `(` continues the previous one); return an object as
 `({ a, b })`; `page.click` never waits (use `waitForSelector` first); page names are per browser (`--headless` and
-headed are separate Chromes and profiles); refs reset on navigation — re-snapshot; use absolute paths for files
+headed are separate Chromes and profiles); refs reset on navigation — re-snapshot; file paths resolve against your cwd
 (uploadFile, screenshot/pdf `path`); do not run parallel doobie calls against the same named page.

@@ -34,6 +34,7 @@ import {
   JSHandle,
   Frame,
   Locator,
+  TimeoutError,
   type Browser,
   type Dialog,
   type GoToOptions,
@@ -45,7 +46,7 @@ import { DEFAULTS } from "../shared/config.ts";
 import { shot, type ShotOptions, type ShotResult } from "./shot.ts";
 import { fill } from "./fill.ts";
 import { waitForLoad, installLoadTracker, type WaitForLoadOptions, type WaitForLoadResult } from "./wait-for-load.ts";
-import { pageLine, abortedByRun } from "../daemon/run-context.ts";
+import { pageLine, abortedByRun, resolveRunPath } from "../daemon/run-context.ts";
 import {
   snapshot,
   resolveRef,
@@ -364,6 +365,45 @@ function patchProtos(
   }
 }
 
+/** Rewrite `{ path }` options (first arg object) so relative paths resolve against the caller's cwd. */
+function withRunPaths(args: unknown[]): unknown[] {
+  const o = args[0];
+  if (o && typeof o === "object" && typeof (o as { path?: unknown }).path === "string") {
+    return [{ ...(o as object), path: resolveRunPath((o as { path: string }).path) }, ...args.slice(1)];
+  }
+  return args;
+}
+
+/** uploadFile(...paths) and handle.screenshot({ path }): resolve relative paths against the caller's cwd. */
+function patchPathArgs(protos: object[]): void {
+  for (const proto of protos) {
+    const up = Object.getOwnPropertyDescriptor(proto, "uploadFile");
+    if (up && typeof up.value === "function") {
+      const fn = up.value as AnyFn;
+      Object.defineProperty(proto, "uploadFile", {
+        value: function (this: unknown, ...paths: unknown[]) {
+          return fn.apply(this, paths.map((x) => (typeof x === "string" ? resolveRunPath(x) : x)));
+        },
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+    }
+    const sc = Object.getOwnPropertyDescriptor(proto, "screenshot");
+    if (sc && typeof sc.value === "function") {
+      const fn = sc.value as AnyFn;
+      Object.defineProperty(proto, "screenshot", {
+        value: function (this: unknown, ...args: unknown[]) {
+          return fn.apply(this, withRunPaths(args));
+        },
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+    }
+  }
+}
+
 /** The CDP subclasses override a few methods (scrollIntoView, uploadFile, goto, jsonValue...); they are runtime exports without typings. */
 function cdpProto(name: string): object[] {
   const cls = (pptr as unknown as Record<string, { prototype?: object } | undefined>)[name];
@@ -374,6 +414,8 @@ let protosPatched = false;
 function patchPrototypes(): void {
   if (protosPatched) return;
   protosPatched = true;
+  // Path rewriting goes innermost (applied first, wrapped by the gate/front patches below).
+  patchPathArgs([...cdpProto("CdpElementHandle"), ElementHandle.prototype]);
   patchProtos([...cdpProto("CdpElementHandle"), ElementHandle.prototype], HANDLE_GATED, HANDLE_FRONT, HANDLE_WAIT, pageOfHandle);
   patchProtos([...cdpProto("CdpJSHandle"), JSHandle.prototype], HANDLE_GATED, new Set(), new Set(), () => null);
   patchProtos([...cdpProto("CdpFrame"), Frame.prototype], FRAME_GATED, FRAME_FRONT, FRAME_WAIT, pageOfFrame);
@@ -511,7 +553,10 @@ export function extendPage(page: Page): DoobiePage {
 
   // screenshot: under the front lock (a background tab never produces a frame).
   const origScreenshot = page.screenshot.bind(page) as (...a: unknown[]) => Promise<unknown>;
-  (p as Record<string, unknown>).screenshot = (...args: unknown[]) => withFront(page, () => origScreenshot(...args));
+  (p as Record<string, unknown>).screenshot = (...args: unknown[]) => withFront(page, () => origScreenshot(...withRunPaths(args)));
+  // pdf({ path }): relative paths resolve against the caller's cwd, like screenshot.
+  const origPdf = page.pdf.bind(page) as (...a: unknown[]) => Promise<unknown>;
+  (p as Record<string, unknown>).pdf = (...args: unknown[]) => origPdf(...withRunPaths(args));
 
   // waitForSelector('ref/e5'): refs are immediate; poll the main realm until present/visible.
   // Other selectors: Puppeteer's raf polling (visible/hidden) needs the page in front (Frame patch).
@@ -540,7 +585,7 @@ export function extendPage(page: Page): DoobiePage {
           return null;
         }
         if (Date.now() >= deadline) {
-          throw new Error(`Waiting for selector \`${selector}\` failed: ${timeout}ms exceeded`);
+          throw new TimeoutError(`Waiting for selector \`${selector}\` failed: Waiting failed: ${timeout}ms exceeded`);
         }
         await new Promise((r) => setTimeout(r, 50));
       }

@@ -160,6 +160,13 @@ export function jailPath(name: string): string {
   if (typeof name !== "string" || name.length === 0) throw new Error("file name is required");
   if (name.includes("\0")) throw new Error("file name contains a null byte");
   if (isAbsolutePath(name)) throw new Error(`file name must be relative to the tmp dir, got ${name}`);
+  // One sanctioned subdirectory: browser downloads land in tmp/downloads/<name>.
+  if (name.startsWith("downloads/")) {
+    const rest = name.slice("downloads/".length);
+    if (rest.includes("/") || rest.includes("\\")) throw new Error(`file name must not contain path separators, got ${name}`);
+    if (!/^[A-Za-z0-9._ ()-]+$/.test(rest) || rest === "." || rest === "..") throw new Error(`invalid download file name ${name}`);
+    return joinPath(paths.tmp(), "downloads", rest);
+  }
   if (name.includes("/") || name.includes("\\")) throw new Error(`file name must not contain path separators, got ${name}`);
   if (name === "." || name === ".." ) throw new Error(`invalid file name ${name}`);
   if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error(`file name may only contain [A-Za-z0-9._-], got ${name}`);

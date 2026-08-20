@@ -20,6 +20,16 @@ export interface ActiveRun {
   emit: (frame: Frame) => void;
   /** Closed once the run ended; handle/frame calls made from the script's async chain are rejected then. */
   gate?: RunGateLike;
+  /** The calling client's working directory: relative file paths in scripts resolve against it. */
+  cwd?: string;
+}
+
+/** Resolve a script-supplied file path against the calling client's cwd (absolute paths pass through). */
+export function resolveRunPath(p: string): string {
+  if (typeof p !== "string" || p.length === 0 || p.startsWith("/")) return p;
+  const base = currentRun()?.cwd;
+  if (!base) return p;
+  return base.endsWith("/") ? base + p : base + "/" + p;
 }
 
 const als = new AsyncLocalStorage<ActiveRun>();

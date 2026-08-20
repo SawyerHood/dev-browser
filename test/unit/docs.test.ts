@@ -61,7 +61,7 @@ test("help.md no longer carries the stale claims from the review", () => {
   expect(pages).toMatch(/`pages`\/`status`/);
   const refs = section("refs");
   expect(refs).toContain("page.$/$$ return null/[]");
-  expect(refs).toContain("plain Error");
+  expect(refs).toContain("TimeoutError");
   const forms = section("forms");
   expect(forms).toContain("pdf({ path })");
   expect(forms).toContain("auto-accepted");
@@ -86,7 +86,7 @@ test("README, SKILL, HANDOFF and design doc reflect the current behaviour", () =
   expect(DESIGN).not.toContain("`serve`/MCP");
 });
 
-test("documented behaviours hold: help exit 2, ASI ReferenceError, stale ref $ -> null, ref wait is a plain Error, pages -b", async () => {
+test("documented behaviours hold: help exit 2, ASI ReferenceError, stale ref $ -> null, ref wait is a TimeoutError, pages -b", async () => {
   const bogus = await cli.run(["help", "bogus-topic"]);
   expect(bogus.code).toBe(2);
   expect(bogus.stderr).toContain('No help topic "bogus-topic"');
@@ -124,7 +124,7 @@ test("documented behaviours hold: help exit 2, ASI ReferenceError, stale ref $ -
       `const p = await browser.getPage("docs"); let r; try { await p.waitForSelector("ref/e1", { timeout: 300 }) } catch (e) { r = { name: e.name, msg: e.message } } r`,
     ]);
     const parsed = JSON.parse(wait.stdout);
-    expect(parsed.name).toBe("Error");
+    expect(parsed.name).toBe("TimeoutError");
     expect(parsed.msg).toContain("Waiting for selector `ref/e1` failed");
   } finally {
     await srv.stop();

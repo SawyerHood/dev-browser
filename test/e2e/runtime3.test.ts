@@ -7,6 +7,7 @@
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { makeCliEnv, type CliEnv } from "../helpers/cli.ts";
 import { startServer, sleep, type FixtureServer } from "../helpers/server.ts";
 
@@ -245,5 +246,25 @@ for (let i = 0; i < 40; i++) { await new Promise(r => setTimeout(r, 250)); await
     const r = await running;
     expect(r.code).toBe(1);
     expect(r.stderr.split("\n")[0]).toMatch(/^BrowserStoppedError: browser "default:headless" was stopped while the script was running/);
+  }, 30_000);
+});
+
+describe("relative file paths resolve against the caller's cwd", () => {
+  test("uploadFile, page.screenshot({path}), handle.screenshot({path}) and pdf({path})", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "doobie-cwd-"));
+    fs.writeFileSync(path.join(dir, "up.txt"), "hello upload");
+    const script = `const p = await browser.getPage("cwd");
+await p.setContent('<input type=file id=f><div id=d style="width:40px;height:40px;background:red"></div>');
+const f = await p.$("#f"); await f.uploadFile("up.txt");
+const name = await p.$eval("#f", e => e.files[0].name);
+await p.screenshot({ path: "page.png" });
+const d = await p.$("#d"); await d.screenshot({ path: "el.png" });
+await p.pdf({ path: "doc.pdf" });
+name`;
+    const r = await cli.run([...H], { stdin: script, cwd: dir });
+    expect(r.stderr).toBe("");
+    expect(r.stdout.trim()).toBe("up.txt");
+    for (const f of ["page.png", "el.png", "doc.pdf"]) expect(fs.existsSync(path.join(dir, f))).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
   }, 30_000);
 });
