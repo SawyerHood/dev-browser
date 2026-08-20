@@ -1,4 +1,7 @@
-#!/usr/bin/env node
+#!/bin/sh
+':' //; exec "$(command -v node || command -v bun)" "$0" "$@"
+// ^ sh/JS polyglot: runs under node when present, else bun (bun-only machines
+// that installed with `bun add -g`, where the postinstall was blocked).
 // npm shim. postinstall downloads the native binary next to this file as
 // bin/doobie-bin and, for global installs, re-points the global `doobie`
 // symlink at the binary so Node is not on the hot path. This shim is the
