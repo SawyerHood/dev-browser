@@ -123,6 +123,7 @@ export class BrowserManager {
     let launched = false;
     let wsEndpoint: string | undefined;
     let hadSession = false;
+    let cleanExitMarked = false;
     if (spec.kind === "launch") {
       const profileDir = paths.profile(spec.name, spec.headless, spec.ignoreHTTPSErrors);
       // A profile that has been used before may restore last session's tabs.
@@ -147,6 +148,7 @@ export class BrowserManager {
         r = await launchBrowser(spec, this.log, { timeoutMs: opts.timeoutMs });
       }
       browser = r.browser;
+      cleanExitMarked = r.cleanExitMarked;
       launched = true;
       wsEndpoint = browser.wsEndpoint();
     } else if (spec.kind === "cdp") {
@@ -196,7 +198,9 @@ export class BrowserManager {
     (browser as { newPage: Browser["newPage"] }).newPage = async (...args) => extendPage(await origNewPage(...args));
 
     if (launched) {
-      await closeRestoredTabs(browser, key, this.log, hadSession);
+      // When the profile was marked as a clean exit, Chrome does not restore the
+      // previous session, so no settle wait is needed (the sweep still runs).
+      await closeRestoredTabs(browser, key, this.log, hadSession && !cleanExitMarked);
       for (const t of browser.targets()) {
         if (t.type() !== "page") continue;
         const id = (t as unknown as { _targetId?: string })._targetId;
