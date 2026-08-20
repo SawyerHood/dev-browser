@@ -6,10 +6,10 @@
 import { test, expect, describe, afterAll, beforeAll } from "bun:test";
 import * as fs from "node:fs";
 import { getBrowser, newPage, withPage, closeBrowser } from "./helpers/browser.ts";
-import { ensureFront, resetFront } from "../src/page/extend.ts";
+import { ensureFront, withFront, withFrontWait, frontStateFor } from "../src/page/extend.ts";
 import { readDims } from "../src/page/shot.ts";
 import { RunGate, RunAbortedError, tame, renderResult, formatConsoleArgs } from "../src/daemon/run.ts";
-import { addPageLineHook } from "../src/daemon/run-context.ts";
+import { addPageLineHook, withRun } from "../src/daemon/run-context.ts";
 import { startServer, type FixtureServer, sleep } from "./helpers/server.ts";
 import * as vm from "node:vm";
 
@@ -74,17 +74,99 @@ describe("background tabs", () => {
     }
   }, 20_000);
 
-  test("ensureFront is a no-op (microseconds) when the page is already in front", async () => {
+  test("front lock: bringToFront every time (no cache), ~1 ms per action; same-page actions join, other pages queue", async () => {
     await withPage(async (page) => {
       await page.goto(srv.url("/btn"));
-      resetFront(await getBrowser());
       await ensureFront(page);
       const t0 = performance.now();
-      for (let i = 0; i < 200; i++) await ensureFront(page);
-      const per = (performance.now() - t0) / 200;
-      expect(per).toBeLessThan(0.1);
+      for (let i = 0; i < 100; i++) await ensureFront(page);
+      const per = (performance.now() - t0) / 100;
+      expect(per).toBeLessThan(5); // one CDP round trip, typically ~1 ms
+      const browser = await getBrowser();
+      // nested/concurrent actions on the same page run together
+      let inner = "";
+      await withFront(page, async () => {
+        expect(frontStateFor(browser).count).toBe(1);
+        await withFront(page, async () => {
+          expect(frontStateFor(browser).count).toBe(2);
+          inner = "ran";
+        });
+      });
+      expect(inner).toBe("ran");
+      expect(frontStateFor(browser)).toMatchObject({ active: null, count: 0, queued: 0, waiting: 0 });
+      // an action on another page waits for the holder and runs after it
+      const other = await newPage();
+      try {
+        const order: string[] = [];
+        let releaseA: () => void = () => {};
+        const a = withFront(page, () => new Promise<void>((r) => (releaseA = r)).then(() => void order.push("A")));
+        await sleep(20);
+        const b = withFront(other, async () => void order.push("B"));
+        await sleep(20);
+        expect(order).toEqual([]);
+        expect(frontStateFor(browser)).toMatchObject({ active: page, count: 1, queued: 1 });
+        releaseA();
+        await Promise.all([a, b]);
+        expect(order).toEqual(["A", "B"]);
+        expect(frontStateFor(browser).fronted).toBe(other);
+      } finally {
+        await other.close().catch(() => {});
+      }
     });
-  });
+  }, 20_000);
+
+  test("raf-polled waits (visible/hidden, waitForFunction) resolve on a page another page's actions pushed to the background", async () => {
+    const a = await newPage();
+    const b = await newPage();
+    try {
+      await a.goto(srv.url("/btn"));
+      await b.goto(srv.url("/btn"));
+      await b.click("#b"); // b in front
+      await a.evaluate(() => setTimeout(() => document.body.insertAdjacentHTML("beforeend", "<div id=l>hi</div>"), 400));
+      const t0 = Date.now();
+      const wait = a.waitForSelector("#l", { visible: true, timeout: 4000 });
+      // while a waits, b keeps clicking (each click brings b to front; the lock brings a back when idle)
+      for (let i = 0; i < 5; i++) await b.click("#b");
+      await wait;
+      expect(Date.now() - t0).toBeLessThan(3000);
+      expect(frontStateFor(await getBrowser())).toMatchObject({ count: 0, queued: 0, waiting: 0 });
+      // waitForFunction (raf) on the hidden page too
+      await b.click("#b");
+      await a.evaluate(() => setTimeout(() => ((window as unknown as { flag: boolean }).flag = true), 300));
+      const t1 = Date.now();
+      await a.waitForFunction(() => (window as unknown as { flag: boolean }).flag === true, { timeout: 4000 });
+      expect(Date.now() - t1).toBeLessThan(3000);
+      // withFrontWait bookkeeping unwinds on failure too
+      await expect(withFrontWait(a, async () => { throw new Error("boom"); })).rejects.toThrow("boom");
+      expect(frontStateFor(await getBrowser()).waiting).toBe(0);
+    } finally {
+      await a.close().catch(() => {});
+      await b.close().catch(() => {});
+    }
+  }, 20_000);
+
+  test("locator actions and ElementHandle.scrollIntoView on a background tab complete", async () => {
+    const a = await newPage();
+    const b = await newPage();
+    try {
+      await a.goto(srv.url("/btn"));
+      await b.goto(srv.url("/btn"));
+      await b.click("#b");
+      const t0 = Date.now();
+      await a.locator("#b").click();
+      await b.click("#b");
+      await a.locator("#b").setTimeout(3000).click();
+      await b.click("#b");
+      const h = await a.$("#b");
+      await h!.scrollIntoView();
+      await h!.click();
+      expect(Date.now() - t0).toBeLessThan(6000);
+      expect(await a.evaluate(() => (window as unknown as { clicked: number }).clicked)).toBe(3);
+    } finally {
+      await a.close().catch(() => {});
+      await b.close().catch(() => {});
+    }
+  }, 20_000);
 });
 
 describe("page.shot() math", () => {
@@ -327,6 +409,61 @@ describe("run gate", () => {
       expect(await page.title()).toBe("Btn");
     });
   });
+
+  test("ElementHandle/JSHandle/Frame methods called from a run whose gate closed reject with RunAbortedError", async () => {
+    await withPage(async (page) => {
+      await page.goto(srv.url("/btn"));
+      const gate = new RunGate();
+      const h = (await page.$("#b"))!;
+      const j = await page.evaluateHandle(() => ({ a: 1 }));
+      const f = page.mainFrame();
+      const run = { id: "t", emit: () => {}, gate };
+      // open gate: everything works inside the run context
+      expect(await withRun(run, async () => (await h.evaluate((e) => e.id)) as string)).toBe("b");
+      gate.close("deadline passed");
+      await withRun(run, async () => {
+        await expect(h.evaluate((e) => e.id)).rejects.toThrow(RunAbortedError);
+        await expect(h.click()).rejects.toThrow(RunAbortedError);
+        await expect(j.jsonValue()).rejects.toThrow(RunAbortedError);
+        await expect(f.evaluate(() => 1)).rejects.toThrow(RunAbortedError);
+        await expect(f.waitForSelector("#b")).rejects.toThrow(RunAbortedError);
+      });
+      // outside any run (daemon internals, other runs) the same objects keep working
+      expect(await h.evaluate((e) => e.id)).toBe("b");
+      expect(await f.evaluate(() => 2)).toBe(2);
+      await withRun({ id: "u", emit: () => {}, gate: new RunGate() }, async () => {
+        expect(await j.jsonValue()).toEqual({ a: 1 });
+      });
+    });
+  });
+
+  test("gated results: browser()/pages()/mainFrame()/popup keep proxy identity; setRequestInterception is undone at close", async () => {
+    await withPage(async (page) => {
+      await page.goto(srv.url("/btn"));
+      const gate = new RunGate();
+      const seen: unknown[] = [];
+      gate.onPage = (p) => seen.push(p);
+      const g = gate.guard(page, "page");
+      const b = g.browser();
+      expect(b).not.toBe(page.browser());
+      expect(g.browser()).toBe(b);
+      const pages = await b.pages();
+      expect(pages.includes(g)).toBe(true);
+      expect(pages.includes(page)).toBe(false);
+      expect(seen).toContain(page);
+      expect(g.mainFrame().page()).toBe(g);
+      expect(g.mainFrame()).toBe(g.mainFrame());
+      expect(g.on("console", () => {})).toBe(g);
+      await g.setRequestInterception(true);
+      g.on("request", (r) => void r.continue());
+      await g.goto(srv.url("/btn"));
+      gate.close("ended");
+      await sleep(100);
+      // interception off: navigation works without any request listener
+      await page.goto(srv.url("/btn"), { timeout: 3000 });
+      expect(await page.title()).toBe("Btn");
+    });
+  }, 20_000);
 
   test("per-call overhead of the guard is small", async () => {
     await withPage(async (page) => {

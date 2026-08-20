@@ -40,7 +40,7 @@ function readLaunchState(): LaunchState {
   }
 }
 
-function rememberNoSandbox(chromePath: string): void {
+export function rememberNoSandbox(chromePath: string): void {
   try {
     const st = readLaunchState();
     const set = new Set(st.noSandbox ?? []);
@@ -79,7 +79,7 @@ export function markCleanExit(userDataDir: string): boolean {
   }
 }
 
-function isSandboxError(err: unknown): boolean {
+export function isSandboxError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /No usable sandbox|zygote_host|--no-sandbox|Failed to move to new namespace/i.test(msg);
 }

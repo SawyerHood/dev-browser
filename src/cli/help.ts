@@ -14,12 +14,22 @@ export function topics(): string[] {
   return [...(HELP as string).matchAll(/^## ([\w-]+)/gm)].map((m) => m[1]!.toLowerCase());
 }
 
-export function topicText(topic: string): string {
+/** Message for an unknown topic (callers decide where it goes; the CLI exits 2). */
+export function unknownTopicMessage(topic: string): string {
+  return `No help topic "${topic}". Topics: ${topics().join(", ")}\n`;
+}
+
+/** Section text for a `## topic`, or null when there is no such topic. */
+export function findTopicText(topic: string): string | null {
   const lines = helpText().split("\n");
   const want = `## ${topic.toLowerCase()}`;
   const start = lines.findIndex((l) => l.toLowerCase() === want || l.toLowerCase().startsWith(want + " "));
-  if (start < 0) return `No help topic "${topic}". Topics: ${topics().join(", ")}\n`;
+  if (start < 0) return null;
   let end = lines.findIndex((l, i) => i > start && l.startsWith("## "));
   if (end < 0) end = lines.length;
   return lines.slice(start, end).join("\n").replace(/\n+$/, "") + "\n";
+}
+
+export function topicText(topic: string): string {
+  return findTopicText(topic) ?? unknownTopicMessage(topic);
 }

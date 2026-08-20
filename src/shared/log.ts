@@ -5,6 +5,22 @@ import * as fs from "node:fs";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 
+/**
+ * Errors are formatted as `Name: message` by duck type: errors thrown inside a
+ * script's vm context (or by Puppeteer callbacks attached from it) are not
+ * `instanceof` the daemon's Error and would JSON.stringify to `{}`.
+ */
+export function formatExtra(extra: unknown): string {
+  if (extra && typeof extra === "object") {
+    const e = extra as { name?: unknown; message?: unknown; stack?: unknown };
+    if (typeof e.message === "string" && (typeof e.name === "string" || typeof e.stack === "string")) {
+      return `${typeof e.name === "string" && e.name ? e.name : "Error"}: ${e.message}`;
+    }
+  }
+  const json = JSON.stringify(extra);
+  return json === undefined ? String(extra) : json;
+}
+
 export class FileLogger {
   private fd: number | null = null;
   private bytes = 0;
@@ -37,7 +53,7 @@ export class FileLogger {
     let line = `${ts} ${level.padEnd(5)} ${msg}`;
     if (extra !== undefined) {
       try {
-        line += " " + (extra instanceof Error ? `${extra.name}: ${extra.message}` : JSON.stringify(extra));
+        line += " " + formatExtra(extra);
       } catch {
         line += " [unserializable]";
       }

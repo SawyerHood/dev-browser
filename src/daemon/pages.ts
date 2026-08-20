@@ -10,7 +10,7 @@ import * as path from "node:path";
 import type { Browser, Page, Target } from "puppeteer-core";
 import type { PageInfo } from "../shared/protocol.ts";
 import { paths } from "../shared/paths.ts";
-import { extendPage } from "../page/extend.ts";
+import { extendPage, type DoobiePage } from "../page/extend.ts";
 
 const TARGET_ID_RE = /^[0-9A-F]{32}$/;
 
@@ -37,6 +37,12 @@ export class PageRegistry {
    * first-time calls with different names all adopt the one initial tab.
    */
   private lock: Promise<unknown> = Promise.resolve();
+  /**
+   * Target ids of pages doobie has extended (named pages, getPage(targetId),
+   * newPage, popups of touched pages). On attached browsers (--connect) only
+   * these carry doobie's dialog/load hooks; the user's own tabs are left alone.
+   */
+  private readonly touched = new Set<string>();
 
   constructor(
     private readonly browser: Browser,
@@ -92,8 +98,18 @@ export class PageRegistry {
   private async pageFromTarget(target: Target): Promise<Page> {
     const page = await target.page();
     if (!page) throw new Error(`Target ${(target as Target & { _targetId?: string })._targetId} is not a page`);
-    extendPage(page);
-    return page;
+    return this.adopt(page);
+  }
+
+  /** Extend a page with the doobie helpers and record it as touched. */
+  adopt(page: Page): DoobiePage {
+    this.touched.add(targetIdOf(page));
+    return extendPage(page);
+  }
+
+  /** True when doobie has extended the page with this target id. */
+  isTouched(targetId: string | null | undefined): boolean {
+    return !!targetId && this.touched.has(targetId);
   }
 
   /**
@@ -137,7 +153,7 @@ export class PageRegistry {
       return adopted;
     }
     const page = await this.browser.newPage();
-    extendPage(page);
+    this.adopt(page);
     this.names.set(nameOrId, targetIdOf(page));
     this.save();
     return page;
@@ -145,9 +161,7 @@ export class PageRegistry {
 
   async newPage(): Promise<Page> {
     return this.withLock(async () => {
-      const page = await this.browser.newPage();
-      extendPage(page);
-      return page;
+      return this.adopt(await this.browser.newPage());
     });
   }
 
@@ -176,6 +190,7 @@ export class PageRegistry {
   /** Called when the manager notices a target went away. */
   forgetTarget(targetId: string): void {
     this.load();
+    this.touched.delete(targetId);
     let changed = false;
     for (const [name, tid] of this.names) {
       if (tid === targetId) {

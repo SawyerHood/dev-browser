@@ -9,7 +9,7 @@ import type { Browser, Target } from "puppeteer-core";
 import type { BrowserInfo, BrowserSourceSpec } from "../shared/protocol.ts";
 import { paths, sanitizeName } from "../shared/paths.ts";
 import type { FileLogger } from "../shared/log.ts";
-import { extendPage } from "../page/extend.ts";
+import { DEFAULTS } from "../shared/config.ts";
 import { PageRegistry } from "./pages.ts";
 import { launchBrowser } from "./sources/launch.ts";
 import { connectCdp, redactEndpoint } from "./sources/cdp.ts";
@@ -93,13 +93,19 @@ export class BrowserManager {
     return out;
   }
 
-  /** Get or create the entry for a spec. Concurrent calls for one key share one connect. */
-  async get(spec: BrowserSourceSpec, opts: { timeoutMs: number; idleTimeoutMs: number }): Promise<BrowserEntry> {
+  /**
+   * Get or create the entry for a spec. Concurrent calls for one key share one
+   * connect. `idleTimeoutMs` is applied only when given: run requests carry
+   * the user's --idle-timeout; pages/status lookups pass nothing so they never
+   * reset a previously chosen timeout (a fresh connect without one uses the
+   * default).
+   */
+  async get(spec: BrowserSourceSpec, opts: { timeoutMs: number; idleTimeoutMs?: number }): Promise<BrowserEntry> {
     const key = keyFor(spec);
     const existing = this.entries.get(this.aliases.get(key) ?? key);
     if (existing) {
       if (existing.browser.connected) {
-        existing.idleTimeoutMs = opts.idleTimeoutMs;
+        if (opts.idleTimeoutMs !== undefined) existing.idleTimeoutMs = opts.idleTimeoutMs;
         this.touch(existing);
         return existing;
       }
@@ -107,7 +113,7 @@ export class BrowserManager {
     }
     let p = this.pending.get(key);
     if (!p) {
-      p = this.connect(key, spec, opts).finally(() => this.pending.delete(key));
+      p = this.connect(key, spec, { timeoutMs: opts.timeoutMs, idleTimeoutMs: opts.idleTimeoutMs ?? DEFAULTS.idleTimeoutMs }).finally(() => this.pending.delete(key));
       this.pending.set(key, p);
     }
     return p;
@@ -186,16 +192,24 @@ export class BrowserManager {
     // waitForTarget(...).page(), browserContext().pages(), popups) must carry
     // the doobie helpers too. Target.page() is cached per target, so extending
     // it here covers every later path to that Page.
+    //
+    // Launched browsers are doobie's own: every tab is extended eagerly. An
+    // attached browser (--connect) belongs to the user: materializing a Page
+    // for every tab they open would install doobie's dialog auto-dismiss and
+    // load tracker in tabs no script ever touched. There, only popups whose
+    // opener is a page doobie touched are extended eagerly; everything else
+    // is extended lazily on first access (getPage by name/targetId, newPage).
     browser.on("targetcreated", (t: Target) => {
       if (t.type() !== "page") return;
+      if (!launched && !entry.pages.isTouched(openerTargetId(t))) return;
       t.page()
         .then((p) => {
-          if (p) extendPage(p);
+          if (p) entry.pages.adopt(p);
         })
         .catch(() => {});
     });
     const origNewPage = browser.newPage.bind(browser);
-    (browser as { newPage: Browser["newPage"] }).newPage = async (...args) => extendPage(await origNewPage(...args));
+    (browser as { newPage: Browser["newPage"] }).newPage = async (...args) => entry.pages.adopt(await origNewPage(...args));
 
     if (launched) {
       // When the profile was marked as a clean exit, Chrome does not restore the
@@ -294,6 +308,13 @@ export class BrowserManager {
     }
     this.scheduleReaper();
   }
+}
+
+/** Target id of a page target's opener (the page that called window.open), or null. */
+function openerTargetId(t: Target): string | null {
+  const opener = t.opener() as (Target & { _targetId?: string }) | undefined;
+  if (opener && typeof opener._targetId === "string") return opener._targetId;
+  return null;
 }
 
 /* ------------------------------------------------------------------ */

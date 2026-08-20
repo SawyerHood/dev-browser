@@ -22,7 +22,7 @@ import { DEFAULTS, loadConfigAsync, resolveIdleTimeoutMs, formatDuration, type D
 import { resolvePath, basename } from "../shared/paths.ts";
 import { VERSION } from "../shared/version.ts";
 import { loadDaemonModule } from "./daemon-loader.ts";
-import { helpText, topicText } from "./help.ts";
+import { helpText, findTopicText, unknownTopicMessage } from "./help.ts";
 import { out, err as writeErr, flushAll, stdinIsTTY } from "./io.ts";
 
 export async function main(argv: string[]): Promise<number> {
@@ -53,7 +53,16 @@ export async function main(argv: string[]): Promise<number> {
       return new Promise(() => {}); // the daemon owns the process from here
     }
     case "help": {
-      out(command.topic ? topicText(command.topic) : helpText());
+      if (!command.topic) {
+        out(helpText());
+        return EXIT_OK;
+      }
+      const text = findTopicText(command.topic);
+      if (text === null) {
+        writeErr(`doobie: ${unknownTopicMessage(command.topic)}`);
+        return EXIT_USAGE;
+      }
+      out(text);
       return EXIT_OK;
     }
     case "mcp": {

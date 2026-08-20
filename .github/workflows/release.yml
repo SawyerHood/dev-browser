@@ -19,6 +19,17 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      - name: Verify tag matches package.json version
+        # postinstall downloads from releases/download/v<package.json version> and npm
+        # publishes <package.json version>, so the tag must be exactly v<version>
+        # (prereleases included: tag v1.2.0-rc.1 requires "version": "1.2.0-rc.1").
+        run: |
+          v="v$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "$v" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version ($v)"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches package.json"
       - run: bun install --frozen-lockfile
       - run: bun x tsc --noEmit
       - name: Build all targets
@@ -29,14 +40,41 @@ jobs:
             bun run scripts/build.ts all --target $t --outfile dist/doobie-$name
           done
           cd dist && sha256sum doobie-* > SHA256SUMS && cat SHA256SUMS
+      - name: Smoke test linux-x64 binary
+        run: |
+          chmod +x dist/doobie-linux-x64
+          out=$(dist/doobie-linux-x64 --version)
+          echo "$out"
+          v="$(node -p 'require("./package.json").version')"
+          case "$out" in *"$v"*) ;; *) echo "::error::--version output '$out' does not contain $v"; exit 1 ;; esac
+          dist/doobie-linux-x64 --help | head -n 1
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Package check (published tarball is shim + scripts only)
+        run: |
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e '
+            const [p] = require("/tmp/pack.json");
+            const files = p.files.map((f) => f.path).sort();
+            console.log(files.join("\n"));
+            const need = ["bin/doobie.cjs", "scripts/postinstall.cjs", "scripts/download-binary.cjs", "package.json"];
+            for (const n of need) if (!files.includes(n)) { console.error("missing " + n); process.exit(1); }
+            if (files.some((f) => f.startsWith("src/") || f.startsWith("bin/doobie-bin") || f.startsWith("dist/"))) { console.error("unexpected files in tarball"); process.exit(1); }
+            const pkg = require("./package.json");
+            if (pkg.dependencies && Object.keys(pkg.dependencies).length) { console.error("package must not have runtime dependencies"); process.exit(1); }
+          '
       - name: GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/doobie-*
             dist/SHA256SUMS
       - name: npm publish (only when NPM_TOKEN is configured)
         if: ${{ env.HAS_NPM_TOKEN == 'true' }}
-        run: npm publish --provenance --access public
+        # Prereleases (version contains "-") go to the "next" dist-tag so `npm i -g doobie` stays on stable.
+        run: |
+          v="$(node -p 'require("./package.json").version')"
+          case "$v" in *-*) tag="--tag next" ;; *) tag="" ;; esac
+          npm publish --provenance --access public $tag
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

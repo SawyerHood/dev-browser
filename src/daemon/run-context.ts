@@ -9,9 +9,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Frame } from "../shared/protocol.ts";
 
+/** The part of a run's gate that Puppeteer prototype patches consult (see extend.ts). */
+export interface RunGateLike {
+  readonly finished: boolean;
+  abortedCall(): Promise<never>;
+}
+
 export interface ActiveRun {
   id: string;
   emit: (frame: Frame) => void;
+  /** Closed once the run ended; handle/frame calls made from the script's async chain are rejected then. */
+  gate?: RunGateLike;
 }
 
 const als = new AsyncLocalStorage<ActiveRun>();
@@ -22,6 +30,18 @@ export function withRun<T>(run: ActiveRun, fn: () => Promise<T>): Promise<T> {
 
 export function currentRun(): ActiveRun | undefined {
   return als.getStore();
+}
+
+/**
+ * When the calling run's gate is closed, the rejection a zombie call gets;
+ * otherwise null. Cheap enough to sit in front of every ElementHandle/JSHandle/
+ * Frame method: objects that escape the page proxies (page.$, mainFrame(),
+ * evaluateHandle) still stop at the script's next await after the run ended.
+ */
+export function abortedByRun(): Promise<never> | null {
+  const run = als.getStore();
+  if (run?.gate?.finished) return run.gate.abortedCall();
+  return null;
 }
 
 /* ------------------------------------------------------------------ */

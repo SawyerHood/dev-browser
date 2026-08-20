@@ -15,12 +15,14 @@
  *   ref(id)        -> Element | null   (accepts "e5" or "f1e5")
  *   box(id)        -> [x, y, w, h] | null   (frame-local viewport px)
  * }
+ * window.__doobieRefState = { lastRef, refMap }: the ref counter + id map, kept outside the
+ * versioned closure so a reinstall (INPAGE_VERSION bump on a long-lived page) never reuses ids.
  *
  * NOTE: written with String.raw so regexes read like normal JS. Do not use
  * backticks or "${" inside the script body.
  */
 
-export const INPAGE_VERSION = 3;
+export const INPAGE_VERSION = 4;
 
 export const INPAGE_SCRIPT: string = String.raw`(() => {
   if (window.__doobie && window.__doobie.version === ${INPAGE_VERSION}) return;
@@ -154,6 +156,8 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
   let cacheIsHidden;
   let cachePointerEvents;
   let cacheRole;
+  let cachePseudoContentBefore;
+  let cachePseudoContentAfter;
   let ariaCachesCounter = 0;
 
   function beginAriaCaches() {
@@ -163,6 +167,8 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     cacheIsHidden = cacheIsHidden || new Map();
     cachePointerEvents = cachePointerEvents || new Map();
     cacheRole = cacheRole || new Map();
+    cachePseudoContentBefore = cachePseudoContentBefore || new Map();
+    cachePseudoContentAfter = cachePseudoContentAfter || new Map();
   }
   function endAriaCaches() {
     if (!--ariaCachesCounter) {
@@ -170,6 +176,8 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
       cacheIsHidden = undefined;
       cachePointerEvents = undefined;
       cacheRole = undefined;
+      cachePseudoContentBefore = undefined;
+      cachePseudoContentAfter = undefined;
     }
     endDOMCaches();
   }
@@ -351,7 +359,7 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     if (options.visitedElements.has(element)) return "";
     const childOptions = Object.assign({}, options, { embeddedInTargetElement: options.embeddedInTargetElement === "self" ? "descendant" : options.embeddedInTargetElement });
     if (!options.includeHidden) {
-      const isEmbeddedInHiddenReferenceTraversal = !!(options.embeddedInLabelledBy && options.embeddedInLabelledBy.hidden) || !!(options.embeddedInLabel && options.embeddedInLabel.hidden);
+      const isEmbeddedInHiddenReferenceTraversal = !!(options.embeddedInLabelledBy && options.embeddedInLabelledBy.hidden) || !!(options.embeddedInLabel && options.embeddedInLabel.hidden) || !!(options.embeddedInNativeTextAlternative && options.embeddedInNativeTextAlternative.hidden);
       if (isElementIgnoredForAria(element) || (!isEmbeddedInHiddenReferenceTraversal && isElementHiddenForAria(element))) {
         options.visitedElements.add(element);
         return "";
@@ -359,46 +367,13 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     }
     const labelledBy = getAriaLabelledByElements(element);
     if (!options.embeddedInLabelledBy) {
-      const accessibleName = (labelledBy || []).map(ref => getTextAlternativeInternal(ref, Object.assign({}, options, { embeddedInLabelledBy: { element: ref, hidden: isElementHiddenForAria(ref) }, embeddedInTargetElement: undefined, embeddedInLabel: undefined }))).join(" ");
+      const accessibleName = (labelledBy || []).map(ref => getTextAlternativeInternal(ref, Object.assign({}, options, { embeddedInLabelledBy: { element: ref, hidden: isElementHiddenForAria(ref) }, embeddedInTargetElement: undefined, embeddedInLabel: undefined, embeddedInNativeTextAlternative: undefined }))).join(" ");
       if (accessibleName) return accessibleName;
     }
     const role = getAriaRole(element) || "";
     const tagName = elementSafeTagName(element);
-    const ariaLabel = element.getAttribute("aria-label") || "";
-    if (ariaLabel.trim()) { options.visitedElements.add(element); return ariaLabel; }
-    if (!["presentation","none"].includes(role)) {
-      if (tagName === "INPUT" && ["button","submit","reset"].includes(element.type)) {
-        options.visitedElements.add(element);
-        const value = element.value || "";
-        if (value.trim()) return value;
-        if (element.type === "submit") return "Submit";
-        if (element.type === "reset") return "Reset";
-        return element.getAttribute("title") || "";
-      }
-      if (tagName === "INPUT" && element.type === "image") {
-        options.visitedElements.add(element);
-        const alt = element.getAttribute("alt") || "";
-        if (alt.trim()) return alt;
-        const title = element.getAttribute("title") || "";
-        if (title.trim()) return title;
-        return "Submit";
-      }
-      if (tagName === "IMG") {
-        options.visitedElements.add(element);
-        const alt = element.getAttribute("alt") || "";
-        if (alt.trim()) return alt;
-        return element.getAttribute("title") || "";
-      }
-      if (!labelledBy && ["BUTTON","INPUT","TEXTAREA","SELECT"].includes(tagName)) {
-        const labels = element.labels;
-        if (labels && labels.length) {
-          options.visitedElements.add(element);
-          return [...labels].map(label => getTextAlternativeInternal(label, Object.assign({}, options, { embeddedInLabel: { element: label, hidden: isElementHiddenForAria(label) }, embeddedInLabelledBy: undefined, embeddedInTargetElement: undefined }))).filter(name => !!name).join(" ");
-        }
-      }
-    }
-    // 2e: embedded control inside a label / labelledby target contributes its value.
-    if (!!options.embeddedInLabel || !!options.embeddedInLabelledBy) {
+    // 2e: embedded control inside a label / labelledby target / naming ancestor contributes its value.
+    if (!!options.embeddedInLabel || !!options.embeddedInLabelledBy || options.embeddedInTargetElement === "descendant") {
       const isOwnLabel = [...(element.labels || [])].includes(options.embeddedInLabel && options.embeddedInLabel.element);
       const isOwnLabelledBy = (getAriaLabelledByElements(element) || []).includes(options.embeddedInLabelledBy && options.embeddedInLabelledBy.element);
       if (!isOwnLabel && !isOwnLabelledBy) {
@@ -432,10 +407,83 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
         if (role === "menu") { options.visitedElements.add(element); return ""; }
       }
     }
+    const ariaLabel = element.getAttribute("aria-label") || "";
+    if (ariaLabel.trim()) { options.visitedElements.add(element); return ariaLabel; }
+    if (!["presentation","none"].includes(role)) {
+      if (tagName === "INPUT" && ["button","submit","reset"].includes(element.type)) {
+        options.visitedElements.add(element);
+        const value = element.value || "";
+        if (value.trim()) return value;
+        if (element.type === "submit") return "Submit";
+        if (element.type === "reset") return "Reset";
+        return element.getAttribute("title") || "";
+      }
+      if (tagName === "INPUT" && element.type === "image") {
+        options.visitedElements.add(element);
+        const alt = element.getAttribute("alt") || "";
+        if (alt.trim()) return alt;
+        const title = element.getAttribute("title") || "";
+        if (title.trim()) return title;
+        return "Submit";
+      }
+      if (tagName === "INPUT" && element.type === "file") {
+        options.visitedElements.add(element);
+        const labels = element.labels || [];
+        if (labels.length && !options.embeddedInLabelledBy) return getAccessibleNameFromAssociatedLabels(labels, options);
+        return "Choose File";
+      }
+      if (tagName === "IMG") {
+        options.visitedElements.add(element);
+        const alt = element.getAttribute("alt") || "";
+        if (alt.trim()) return alt;
+        return element.getAttribute("title") || "";
+      }
+      if (!labelledBy && (tagName === "BUTTON" || tagName === "OUTPUT")) {
+        const labels = element.labels;
+        if (labels && labels.length) {
+          options.visitedElements.add(element);
+          return getAccessibleNameFromAssociatedLabels(labels, options);
+        }
+      }
+      if (!labelledBy && ["INPUT","TEXTAREA","SELECT"].includes(tagName)) {
+        options.visitedElements.add(element);
+        const labels = element.labels;
+        if (labels && labels.length) return getAccessibleNameFromAssociatedLabels(labels, options);
+        const usePlaceholder = (tagName === "INPUT" && ["text","password","search","tel","email","url"].includes(element.type)) || tagName === "TEXTAREA";
+        const placeholder = element.getAttribute("placeholder") || "";
+        const title = element.getAttribute("title") || "";
+        if (!usePlaceholder || title) return title;
+        return placeholder;
+      }
+      if (!labelledBy && (tagName === "FIELDSET" || tagName === "FIGURE" || tagName === "TABLE")) {
+        options.visitedElements.add(element);
+        const captionTag = tagName === "FIELDSET" ? "LEGEND" : tagName === "FIGURE" ? "FIGCAPTION" : "CAPTION";
+        for (let child = element.firstElementChild; child; child = child.nextElementSibling) {
+          if (elementSafeTagName(child) === captionTag) {
+            return getTextAlternativeInternal(child, Object.assign({}, childOptions, { embeddedInNativeTextAlternative: { element: child, hidden: isElementHiddenForAria(child) } }));
+          }
+        }
+        if (tagName === "TABLE") { const summary = element.getAttribute("summary") || ""; if (summary) return summary; }
+        else return element.getAttribute("title") || "";
+      }
+      if (tagName === "SVG" || element.ownerSVGElement) {
+        options.visitedElements.add(element);
+        for (let child = element.firstElementChild; child; child = child.nextElementSibling) {
+          if (elementSafeTagName(child) === "TITLE" && child.ownerSVGElement) {
+            return getTextAlternativeInternal(child, Object.assign({}, childOptions, { embeddedInLabelledBy: { element: child, hidden: isElementHiddenForAria(child) } }));
+          }
+        }
+      }
+      if (element.ownerSVGElement && tagName === "A") {
+        const title = element.getAttribute("xlink:title") || "";
+        if (title.trim()) { options.visitedElements.add(element); return title; }
+      }
+    }
     // 2f: name from content. Playwright's allowsNameFromContent(role, targetDescendant): a descendant of a
     // naming element contributes its text even when its own role (span/div/p/strong/li/...) would not.
     const allowsNameFromContent = kNameFromContentRoles.includes(role) || (options.embeddedInTargetElement === "descendant" && kDescendantNameFromContentRoles.includes(role));
-    if (allowsNameFromContent || !!options.embeddedInLabelledBy || !!options.embeddedInLabel) {
+    const shouldNameFromContentForSummary = tagName === "SUMMARY" && !["presentation","none"].includes(role);
+    if (allowsNameFromContent || shouldNameFromContentForSummary || !!options.embeddedInLabelledBy || !!options.embeddedInLabel || !!options.embeddedInNativeTextAlternative) {
       options.visitedElements.add(element);
       const accessibleName = innerAccumulatedElementText(element, childOptions);
       const maybeTrimmedAccessibleName = options.embeddedInTargetElement === "self" ? accessibleName.trim() : accessibleName;
@@ -463,16 +511,29 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
         tokens.push(node.textContent || "");
       }
     };
-    const assignedNodes = element.nodeName === "SLOT" ? element.assignedNodes() : [];
-    if (assignedNodes.length) {
-      for (const child of assignedNodes) visit(child, false);
+    tokens.push(getCSSContent(element, "::before") || "");
+    const content = getCSSContent(element);
+    if (content !== undefined) {
+      tokens.push(content);
     } else {
-      for (let child = element.firstChild; child; child = child.nextSibling) visit(child, true);
-      if (element.shadowRoot) {
-        for (let child = element.shadowRoot.firstChild; child; child = child.nextSibling) visit(child, true);
+      const assignedNodes = element.nodeName === "SLOT" ? element.assignedNodes() : [];
+      if (assignedNodes.length) {
+        for (const child of assignedNodes) visit(child, false);
+      } else {
+        for (let child = element.firstChild; child; child = child.nextSibling) visit(child, true);
+        if (element.shadowRoot) {
+          for (let child = element.shadowRoot.firstChild; child; child = child.nextSibling) visit(child, true);
+        }
+        if (element.hasAttribute("aria-owns")) {
+          for (const owned of getIdRefs(element, element.getAttribute("aria-owns"))) visit(owned, true);
+        }
       }
     }
+    tokens.push(getCSSContent(element, "::after") || "");
     return tokens.join("");
+  }
+  function getAccessibleNameFromAssociatedLabels(labels, options) {
+    return [...labels].map(label => getTextAlternativeInternal(label, Object.assign({}, options, { embeddedInLabel: { element: label, hidden: isElementHiddenForAria(label) }, embeddedInNativeTextAlternative: undefined, embeddedInLabelledBy: undefined, embeddedInTargetElement: undefined }))).filter(name => !!name).join(" ");
   }
 
   const kAriaCheckedRoles = ["checkbox","menuitemcheckbox","option","radio","switch","menuitemradio","treeitem"];
@@ -556,27 +617,49 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     if (cache) for (const parent of parents) cache.set(parent, result);
     return result;
   }
+  // Text contributed by CSS content (the element's own, or its ::before/::after pseudo). Only string tokens
+  // count (Playwright's parseCSSContentPropertyAsString): url()/counter()/attr()/open-quote yield nothing.
   function getCSSContent(element, pseudo) {
+    const cache = pseudo === "::before" ? cachePseudoContentBefore : pseudo === "::after" ? cachePseudoContentAfter : undefined;
+    if (cache && cache.has(element)) return cache.get(element);
     const style = getElementComputedStyle(element, pseudo);
-    if (!style) return undefined;
-    const contentValue = style.content;
-    if (!contentValue || contentValue === "none" || contentValue === "normal") return undefined;
-    if (style.display === "none" || style.visibility === "hidden") return undefined;
-    const match = contentValue.match(/^"(.*)"$/);
-    if (match) {
-      const content = match[1].replace(/\\"/g, '"');
-      if (pseudo) {
-        const display = style.display || "inline";
-        if (display !== "inline") return " " + content + " ";
+    let content;
+    if (style) {
+      const contentValue = style.content;
+      if (contentValue && contentValue !== "none" && contentValue !== "normal" && style.display !== "none" && style.visibility !== "hidden") {
+        content = parseCSSContentAsString(contentValue);
       }
-      return content;
     }
-    return undefined;
+    if (pseudo && content !== undefined) {
+      const display = (style && style.display) || "inline";
+      if (display !== "inline") content = " " + content + " ";
+    }
+    if (cache) cache.set(element, content);
+    return content;
+  }
+  function parseCSSContentAsString(value) {
+    // "a" "b" -> ab; anything that is not a quoted string (url(), counter(), attr(), keywords) is dropped.
+    // Alternative text after "/" (content: url(x) / "alt") wins when present.
+    const slash = value.indexOf(" / ");
+    if (slash !== -1) value = value.slice(slash + 3);
+    value = value.replace(/[a-z-]+\([^)]*\)/gi, ""); // url("x"), counter(), attr(), image-set()...
+    let out = "";
+    let found = false;
+    const re = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g;
+    let m;
+    while ((m = re.exec(value))) {
+      found = true;
+      out += (m[1] !== undefined ? m[1] : m[2]).replace(/\\(.)/g, "$1");
+    }
+    return found ? out : undefined;
   }
 
   // === refs (persist for the lifetime of the document) ===
-  let lastRef = 0;
-  const refMap = new Map(); // "e5" -> WeakRef<Element> | Element
+  // The counter and the id -> element map live on the window of the isolated world, NOT in this closure:
+  // a newer doobie (higher INPAGE_VERSION) reinstalling into a long-lived page keeps handing out fresh ids
+  // instead of restarting at e1 while old elements still carry their expando refs.
+  const refState = window.__doobieRefState || (window.__doobieRefState = { lastRef: 0, refMap: new Map() });
+  const refMap = refState.refMap; // "e5" -> WeakRef<Element> | Element
   const REF_KEY = "__doobieRef";
   const HasWeakRef = typeof WeakRef === "function";
 
@@ -660,7 +743,8 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
       if (element.nodeName === "IFRAME" || element.nodeName === "FRAME") return;
       if (childAriaNode && childAriaNode.editableText !== undefined) return; // contenteditable textbox: value shown, DOM children skipped
       // Descendants of an element that already shows [cursor=pointer] inherit the cursor; they are not clickable on their own.
-      const childPointerInherited = pointerInherited || !!(childAriaNode && childAriaNode.box && childAriaNode.box.cursor === "pointer") || getElementComputedStyle(element)?.cursor === "pointer";
+      // Only a rendered ancestor that got a ref counts (not role=presentation, display:contents or pointer-events:none wrappers).
+      const childPointerInherited = pointerInherited || !!(childAriaNode && providesPointerCursor(childAriaNode));
       processElement(childAriaNode || ariaNode, element, ariaChildren, visible, childPointerInherited);
     };
 
@@ -714,7 +798,7 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     const element = ariaNode.element;
     let ariaRef = element[REF_KEY];
     if (!ariaRef || ariaRef.role !== ariaNode.role || ariaRef.name !== ariaNode.name) {
-      ariaRef = { role: ariaNode.role, name: ariaNode.name, ref: "e" + (++lastRef) };
+      ariaRef = { role: ariaNode.role, name: ariaNode.name, ref: "e" + (++refState.lastRef) };
       try { Object.defineProperty(element, REF_KEY, { value: ariaRef, configurable: true, writable: true, enumerable: false }); }
       catch (e) { element[REF_KEY] = ariaRef; }
       refMap.set(ariaRef.ref, HasWeakRef ? new WeakRef(element) : element);
@@ -769,7 +853,8 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
       }
       const removeSelf = node.role === "generic" && !node.name && result.length <= 1 && result.every(c => typeof c !== "string" && !!c.ref);
       if (removeSelf) return result;
-      node.children = result;
+      // Collapsing generics may leave a single text equal to the name (svg <title> text next to a <path>): dedupe again.
+      node.children = result.length === 1 && result[0] === node.name ? [] : result;
       return [node];
     };
     normalizeChildren(node);
@@ -820,6 +905,8 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
   }
 
   function hasPointerCursor(ariaNode) { return ariaNode.box.cursor === "pointer"; }
+  // The node itself is the click target for its [cursor=pointer]: ref'd, laid out, receives pointer events.
+  function providesPointerCursor(ariaNode) { return !!ariaNode.ref && !!ariaNode.box.rect && ariaNode.receivesPointerEvents && hasPointerCursor(ariaNode); }
   // Roles that are interactive by definition: [cursor=pointer] adds nothing for them
   // (it is ~20% of a link-heavy snapshot), so it is only rendered on other roles.
   const kImplicitlyClickableRoles = new Set(["link","button","checkbox","radio","combobox","textbox","searchbox","menuitem","menuitemcheckbox","menuitemradio","tab","switch","option","slider","spinbutton","listbox","menu","menubar","tablist","treeitem"]);
@@ -876,7 +963,14 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
       if (ariaNode.role === "iframe" && ariaNode.ref) {
         const r = ariaNode.box && ariaNode.box.rect;
         const el = ariaNode.element;
-        const origin = r ? [Math.round(r.left + offX + (el.clientLeft || 0)), Math.round(r.top + offY + (el.clientTop || 0))] : [offX, offY];
+        let origin = [offX, offY];
+        if (r) {
+          // content-box origin: border (clientLeft/Top) + padding
+          const cs = getElementComputedStyle(el);
+          const padL = cs ? parseFloat(cs.paddingLeft) || 0 : 0;
+          const padT = cs ? parseFloat(cs.paddingTop) || 0 : 0;
+          origin = [Math.round(r.left + offX + (el.clientLeft || 0) + padL), Math.round(r.top + offY + (el.clientTop || 0) + padT)];
+        }
         iframes.push({ ref: ariaNode.ref, line: lines.length, origin });
       }
       if (!children.length && !propKeys.length) {
@@ -887,7 +981,7 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
         lines.push(escapedKey + ":");
         for (const name of propKeys) lines.push(indent + "  - /" + name + ": " + yamlEscapeValueIfNeeded(ariaNode.props[name]));
         const childIndent = indent + "  ";
-        const inCursorPointer = !!ariaNode.ref && renderCursorPointer && hasPointerCursor(ariaNode);
+        const inCursorPointer = renderCursorPointer && providesPointerCursor(ariaNode);
         for (const child of children) {
           if (typeof child === "string") visitText(child, childIndent);
           else visit(child, childIndent, renderCursorPointer && !inCursorPointer, level + 1);

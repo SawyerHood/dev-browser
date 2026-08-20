@@ -265,7 +265,9 @@ async function frameViewportOrigin(frame: Frame): Promise<[number, number]> {
     try {
       const [dx, dy] = await el.evaluate((e) => {
         const r = e.getBoundingClientRect();
-        return [r.left + (e as HTMLElement).clientLeft, r.top + (e as HTMLElement).clientTop];
+        const cs = getComputedStyle(e);
+        // content-box origin: border (clientLeft/Top) + padding
+        return [r.left + (e as HTMLElement).clientLeft + (parseFloat(cs.paddingLeft) || 0), r.top + (e as HTMLElement).clientTop + (parseFloat(cs.paddingTop) || 0)];
       });
       x += dx!;
       y += dy!;

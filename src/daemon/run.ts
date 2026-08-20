@@ -11,13 +11,20 @@
  * RunAbortedError, so a zombie script dies at its next await instead of
  * mutating the page under the next script. The gate also records in-flight
  * calls (for the timeout message), listeners added with page.on/once (removed
- * at run end) and timers created through the sandbox globals (cleared at run
- * end).
+ * at run end), request interception the script enabled (disabled at run end)
+ * and timers created through the sandbox globals (cleared at run end).
+ *
+ * Pages that surface through Puppeteer's own graph (page.browser().pages(),
+ * frame.page(), the 'popup' event) are mapped to the same per-run proxy as
+ * browser.getPage returns for that Page, so identity comparisons work and the
+ * gate covers them. ElementHandle/JSHandle/Frame objects are gated through
+ * prototype patches that consult the active run (see page/extend.ts).
  */
 import * as vm from "node:vm";
 import * as fs from "node:fs";
 import * as util from "node:util";
 import type { Page, ConsoleMessage } from "puppeteer-core";
+import { extendPage } from "../page/extend.ts";
 import type { ErrorFrame, Frame, PageInfo, ResultFrame, RunRequest } from "../shared/protocol.ts";
 import { EXIT_ERROR, EXIT_OK, EXIT_TIMEOUT } from "../shared/protocol.ts";
 import { DEFAULTS } from "../shared/config.ts";
@@ -68,6 +75,12 @@ function isJSHandle(v: unknown): v is { asElement(): unknown } {
 }
 function isPage(v: unknown): v is Page {
   return !!v && typeof v === "object" && typeof (v as { mainFrame?: unknown }).mainFrame === "function" && typeof (v as { url?: unknown }).url === "function";
+}
+function isBrowser(v: unknown): boolean {
+  return !!v && typeof v === "object" && typeof (v as { pages?: unknown }).pages === "function" && typeof (v as { wsEndpoint?: unknown }).wsEndpoint === "function";
+}
+function isFrame(v: unknown): boolean {
+  return !!v && typeof v === "object" && typeof (v as { childFrames?: unknown }).childFrames === "function" && typeof (v as { page?: unknown }).page === "function";
 }
 
 /**
@@ -147,13 +160,21 @@ type AnyFn = (...a: unknown[]) => unknown;
 const LISTENER_ADD = new Set<PropertyKey>(["on", "once", "addListener", "prependListener", "prependOnceListener"]);
 const LISTENER_REMOVE = new Set<PropertyKey>(["off", "removeListener"]);
 const DEVICES = new Set<PropertyKey>(["mouse", "keyboard", "touchscreen"]);
+/** Methods whose results can be Pages/Browsers/Frames and are mapped to gated proxies (see RunGate.mapValue). */
+const MAPPED_RESULTS = new Set<PropertyKey>(["browser", "browserContext", "mainFrame", "frames", "pages", "newPage", "page", "childFrames", "parentFrame"]);
 
 export class RunGate {
   finished = false;
   reason = "ended";
   /** In-flight wrapped calls, insertion ordered (the last one is the most recent). */
   private readonly inflight = new Map<object, string>();
+  /** The most recent wrapped call that rejected: which object, which method, its first argument. */
+  lastFailed: { target: object; name: string; arg: unknown } | undefined;
+  /** Called for every Page that surfaces through the gate (getPage/newPage, browser().pages(), popups, frame.page()). */
+  onPage: ((page: Page) => void) | null = null;
   private readonly listeners: Array<{ target: { off: AnyFn }; event: unknown; fn: unknown; orig: unknown }> = [];
+  /** Pages on which the script enabled request interception (page -> enabled). */
+  private readonly interception = new Map<object, boolean>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private readonly intervals = new Set<ReturnType<typeof setInterval>>();
   private readonly immediates = new Set<ReturnType<typeof setImmediate>>();
@@ -198,6 +219,17 @@ export class RunGate {
       }
     }
     this.listeners.length = 0;
+    // Interception is page state, not a listener: left on, every request on the
+    // page would wait forever for a continue() nobody sends.
+    for (const [page, on] of this.interception) {
+      if (!on) continue;
+      try {
+        void (page as { setRequestInterception: (v: boolean) => Promise<void> }).setRequestInterception(false).catch(() => {});
+      } catch {
+        /* page gone */
+      }
+    }
+    this.interception.clear();
   }
 
   /** Sandbox timer globals whose handles are cleared when the run ends. */
@@ -255,11 +287,30 @@ export class RunGate {
     return proxy;
   }
 
+  /**
+   * Map a value coming out of a gated call: Pages, Browsers and Frames become
+   * (identity-stable) gated proxies, arrays are mapped element-wise. Anything
+   * else passes through untouched.
+   */
+  mapValue(v: unknown): unknown {
+    if (!v || typeof v !== "object") return v;
+    if (isPage(v)) {
+      extendPage(v);
+      this.onPage?.(v);
+      return this.guard(v, "page");
+    }
+    if (isBrowser(v)) return this.guard(v, "browser");
+    if (isFrame(v)) return this.guard(v, "frame");
+    if (Array.isArray(v) && v.length > 0 && v.length <= 1000 && (isPage(v[0]) || isFrame(v[0]))) return v.map((x) => this.mapValue(x));
+    return v;
+  }
+
   private makeGuard<T extends object>(target: T, label: string): T {
     const cache = new Map<PropertyKey, { fn: unknown; wrapper: AnyFn }>();
     const subs = new Map<PropertyKey, { raw: unknown; proxy: object }>();
     const gate = this;
-    return new Proxy(target, {
+    let self: T;
+    const proxy = new Proxy(target, {
       get(t, prop) {
         const v = Reflect.get(t, prop, t);
         if (typeof v !== "function") {
@@ -274,7 +325,7 @@ export class RunGate {
         }
         const c = cache.get(prop);
         if (c && c.fn === v) return c.wrapper;
-        const wrapper = gate.wrap(t, prop, v as AnyFn, label);
+        const wrapper = gate.wrap(t, prop, v as AnyFn, label, () => self);
         cache.set(prop, { fn: v, wrapper });
         return wrapper;
       },
@@ -282,29 +333,37 @@ export class RunGate {
         return Reflect.set(t, prop, value, t);
       },
     });
+    self = proxy;
+    return proxy;
   }
 
-  private wrap(target: object, prop: PropertyKey, fn: AnyFn, label: string): AnyFn {
+  private wrap(target: object, prop: PropertyKey, fn: AnyFn, label: string, self: () => object): AnyFn {
     const gate = this;
     const name = `${label}.${String(prop)}`;
     const wrapper = function (this: unknown, ...args: unknown[]): unknown {
       if (gate.finished) return gate.abortedCall();
       if (LISTENER_ADD.has(prop)) {
         const [event, handler] = args;
-        if ((prop === "once" || prop === "prependOnceListener") && typeof handler === "function") {
-          // Puppeteer's once() hides its wrapper, so off(event, handler) could not remove it later; use our own.
+        if (typeof handler === "function") {
+          // Our own wrapper: event payloads that are Pages (popup) come back gated,
+          // and off(event, handler) still works because the entry remembers `orig`.
+          // Puppeteer's once() hides its wrapper, so once() is built on on() too.
+          const once = prop === "once" || prop === "prependOnceListener";
           const t = target as { on: AnyFn; prependListener?: AnyFn; off: AnyFn };
           const entry = { target: t, event, fn: undefined as unknown, orig: handler };
           const w = (...a: unknown[]) => {
-            t.off(event, w);
-            const i = gate.listeners.indexOf(entry);
-            if (i >= 0) gate.listeners.splice(i, 1);
-            return (handler as AnyFn)(...a);
+            if (once) {
+              t.off(event, w);
+              const i = gate.listeners.indexOf(entry);
+              if (i >= 0) gate.listeners.splice(i, 1);
+            }
+            return (handler as AnyFn)(...a.map((x) => gate.mapValue(x)));
           };
           entry.fn = w;
           gate.listeners.push(entry);
-          const method = prop === "once" ? t.on : (t.prependListener ?? t.on);
-          return method.call(t, event, w);
+          const method = prop === "once" || prop === "on" || prop === "addListener" ? t.on : (t.prependListener ?? t.on);
+          method.call(t, event, w);
+          return self();
         }
         gate.listeners.push({ target: target as { off: AnyFn }, event, fn: handler, orig: handler });
       } else if (LISTENER_REMOVE.has(prop)) {
@@ -312,8 +371,13 @@ export class RunGate {
         const i = gate.listeners.findIndex((l) => l.target === target && l.event === event && (l.fn === handler || l.orig === handler));
         if (i >= 0) {
           const entry = gate.listeners.splice(i, 1)[0]!;
-          if (entry.fn !== handler) return fn.apply(target, [event, entry.fn]);
+          if (entry.fn !== handler) {
+            fn.apply(target, [event, entry.fn]);
+            return self();
+          }
         }
+      } else if (prop === "setRequestInterception") {
+        gate.interception.set(target, args[0] === true);
       }
       const token = {};
       gate.inflight.set(token, describeCall(name, args));
@@ -322,15 +386,26 @@ export class RunGate {
         result = fn.apply(target, args);
       } catch (err) {
         gate.inflight.delete(token);
+        gate.lastFailed = { target, name, arg: args[0] };
         throw err;
       }
       if (result && typeof (result as Promise<unknown>).then === "function") {
-        const done = () => gate.inflight.delete(token);
-        (result as Promise<unknown>).then(done, done);
-      } else {
-        gate.inflight.delete(token);
+        const mapped = MAPPED_RESULTS.has(prop);
+        return (result as Promise<unknown>).then(
+          (v) => {
+            gate.inflight.delete(token);
+            return mapped ? gate.mapValue(v) : v;
+          },
+          (err: unknown) => {
+            gate.inflight.delete(token);
+            gate.lastFailed = { target, name, arg: args[0] };
+            throw err;
+          },
+        );
       }
-      return result;
+      gate.inflight.delete(token);
+      if (result === target) return self(); // on()/off() chaining returns the proxy, never the raw object
+      return MAPPED_RESULTS.has(prop) ? gate.mapValue(result) : result;
     };
     Object.defineProperty(wrapper, "name", { value: name });
     return wrapper;
@@ -415,7 +490,7 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
     gate.close("deadline passed");
     deadlineReject(err);
     if (finished) return;
-    void buildErrorFrame(err, req.scriptName, touched, 0, transformed).then((frame) => {
+    void buildErrorFrame(err, req.scriptName, touched, 0, transformed, { gate, entry, manager: ctx.manager }).then((frame) => {
       if (finished) return;
       emit(frame);
       finish(EXIT_TIMEOUT, "deadline passed");
@@ -432,6 +507,13 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
   const track = (page: Page, name: string | null) => {
     if (touched.has(page)) return;
     touched.set(page, { name });
+    // Per-page defaults a previous script may have changed: every run starts from the documented values.
+    try {
+      page.setDefaultTimeout(DEFAULTS.actionTimeoutMs);
+      page.setDefaultNavigationTimeout(DEFAULTS.navigationTimeoutMs);
+    } catch {
+      /* closed page */
+    }
     if (req.quietPage) return;
     const label = () => `[page${name ? ":" + name : ""}]`;
     const onConsole = (msg: ConsoleMessage) => {
@@ -471,6 +553,7 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
     entry.activeRuns++;
     ctx.manager.touch(entry);
     const pages = entry.pages;
+    gate.onPage = (p) => track(p, pages.nameOf(p));
 
     // ---- globals
     const browserApi = Object.freeze({
@@ -546,7 +629,7 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
       filename: req.scriptName,
       lineOffset: transformed.lineOffset,
     }) as () => Promise<unknown>;
-    const value = await Promise.race([withRun({ id: req.id, emit }, () => fn()), deadlinePromise]);
+    const value = await Promise.race([withRun({ id: req.id, emit, gate }, () => fn()), deadlinePromise]);
     const rendered = renderResult(value);
     if (rendered !== undefined) {
       const frame: ResultFrame & { data?: unknown } = { type: "result", value: rendered.text };
@@ -561,7 +644,7 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
       if (err instanceof DeadlineError) return; // the timer owns the timeout frame
       if (err instanceof AbortedError) return; // onAbort already finished the run
       if (err instanceof RunAbortedError) return; // a zombie hit the closed gate; the deadline/abort path owns the outcome
-      const frame = await buildErrorFrame(err, req.scriptName, touched, remaining(), transformed);
+      const frame = await buildErrorFrame(err, req.scriptName, touched, remaining(), transformed, { gate, entry, manager: ctx.manager });
       if (finished) return;
       emit(frame);
       finish(EXIT_ERROR, "ended");
@@ -581,14 +664,37 @@ function looksLikeId(s: string): boolean {
   return /^[0-9A-F]{32}$/.test(s);
 }
 
+/** Puppeteer's wording when the browser goes away under a call. */
+const BROWSER_GONE_RE = /Target closed|Session closed|Connection closed|Browser (was )?disconnected|detached Frame|Navigating frame was detached|Protocol error.*(closed|disconnected)/i;
+
+export class BrowserStoppedError extends Error {
+  constructor(key: string) {
+    super(`browser "${key}" was stopped while the script was running`);
+    this.name = "BrowserStoppedError";
+  }
+}
+
 async function buildErrorFrame(
   err: unknown,
   scriptName: string,
   touched: Map<Page, { name: string | null }>,
   remainingMs: number,
   transformed?: Pick<TransformResult, "columnShifts" | "returnInsert">,
+  run?: { gate: RunGate; entry: BrowserEntry | null; manager: BrowserManager },
 ): Promise<ErrorFrame> {
-  const pages = await describePages(touched, Math.min(1500, Math.max(200, remainingMs)));
+  const gate = run?.gate;
+  const entry = run?.entry;
+  // `doobie stop` (or a crashed Chrome) under a running script: name the cause instead of Puppeteer's
+  // symptom. stop() removes the entry from the manager before closing, so either signal identifies it.
+  if (entry && !(err instanceof DeadlineError) && !(err instanceof AbortedError)) {
+    const msg = String((err as Error | undefined)?.message ?? err);
+    const stopped = !entry.browser.connected || run!.manager.peek(entry.key) !== entry;
+    if (stopped && BROWSER_GONE_RE.test(msg)) {
+      const e = new BrowserStoppedError(entry.key);
+      return { type: "error", kind: "daemon", name: e.name, message: e.message };
+    }
+  }
+  const pages = await describePages(touched, Math.min(1500, Math.max(200, remainingMs)), gate);
   if (err instanceof DeadlineError) {
     return { type: "error", kind: "timeout", name: "TimeoutError", message: err.message, pages };
   }
@@ -602,11 +708,17 @@ async function buildErrorFrame(
   return { type: "error", kind: "script", name: f.name, message: f.message, stack: f.stack, pages };
 }
 
-async function describePages(touched: Map<Page, { name: string | null }>, budgetMs: number): Promise<PageInfo[]> {
+async function describePages(touched: Map<Page, { name: string | null }>, budgetMs: number, gate?: RunGate): Promise<PageInfo[]> {
   const out: PageInfo[] = [];
   const jobs = [...touched.entries()].map(async ([page, meta]) => {
     if (page.isClosed()) return;
-    const url = safeUrl(page);
+    let url = safeUrl(page);
+    // After a failed goto, page.url() still reports the previous document (or about:blank);
+    // say which navigation failed so the agent knows where the page actually stopped.
+    const failed = gate?.lastFailed;
+    if (failed && failed.target === page && /\.goto$/.test(failed.name) && typeof failed.arg === "string" && failed.arg !== url) {
+      url += ` (goto ${JSON.stringify(failed.arg)} failed)`;
+    }
     let title = "";
     try {
       title = await Promise.race([page.title(), new Promise<string>((r) => setTimeout(() => r(""), budgetMs))]);

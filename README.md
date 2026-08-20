@@ -29,8 +29,15 @@ doobie install-skill           # optional: SKILL.md for Claude Code / Codex / ~/
 ```
 
 macOS and Linux. Windows is not yet supported. Requires nothing else at runtime: the binary embeds Bun, Puppeteer and
-the zip extractor used by `doobie install` (no `unzip` needed). Snap-packaged Chromium on Ubuntu cannot read `~/.doobie`;
+the zip extractor used by `doobie install` (no `unzip` needed); the npm package has no runtime dependencies, its
+postinstall only downloads the binary for your platform. Snap-packaged Chromium on Ubuntu cannot read `~/.doobie`;
 use `doobie install` or `DOOBIE_CHROME` there.
+
+If your package manager blocks install scripts (`bun add -g doobie`, pnpm before `pnpm approve-builds`, `npm --ignore-scripts`),
+the first `doobie` run downloads the binary itself (`doobie: downloading binary v...`). To fetch it eagerly instead:
+`bun pm -g trust doobie`, `pnpm approve-builds -g doobie`, or `npm rebuild -g doobie`. Behind a mirror set
+`DOOBIE_DOWNLOAD_BASE=https://mirror/path/v0.1.0` (must serve `doobie-<os>-<arch>` and `SHA256SUMS`); with
+`DOOBIE_SKIP_DOWNLOAD=1` nothing is downloaded and you place the binary at `<pkg>/bin/doobie-bin` yourself.
 
 ## Quick start
 
@@ -70,18 +77,23 @@ Scripts get `browser` (`getPage`, `newPage`, `listPages`, `closePage`), `console
   (navigation 15 s); a script that outlives the deadline is stopped at its next page call. Exit codes: 0 ok, 1 error,
   2 usage, 124 deadline.
 - **Attach, not just launch.** `--connect` attaches to any Chrome over CDP (auto-discovery, port, http, ws, or a raw
-  CDP unix socket); `doobie chrome` starts your installed Chrome with remote debugging on a dedicated profile.
+  CDP unix socket) and only touches the tabs a script asks for (the user's other tabs keep their dialogs and scripts);
+  `doobie chrome` starts your installed Chrome with remote debugging on a dedicated profile and verifies it came up.
+- **Concurrent scripts.** Scripts run in parallel; only launch/connect, page creation and input on different tabs of one
+  browser (a bring-to-front lock, since background tabs do not process input) are serialized. Two scripts on the same
+  named page interleave. Per-script state (default timeouts, request interception) is reset when the script ends.
 
 ## Performance
 
-Measured on Linux, headless, warm daemon, medians of 21 runs (`bun run build && bun run bench/run.ts`):
+Measured on Linux, headless, warm daemon, medians of 9 runs (`bun run build && bun run bench/run.ts --runs 9`):
 
 | scenario                              | time     |
 | ------------------------------------- | -------- |
-| `doobie -e '1+1'` (warm)              | ~14 ms   |
+| `doobie -e '1+1'` (warm)              | ~13 ms   |
 | `getPage("x")` + `page.title()` (warm)| ~14 ms   |
 | `page.snapshot()` (SERP-like page, in-script) | ~18 ms |
-| cold start (spawn daemon + launch headless Chrome) | ~570 ms |
+| `page.shot()` (viewport, in-script)   | ~36 ms   |
+| cold start (spawn daemon + launch headless Chrome) | ~280 ms |
 
 ## Development
 
@@ -94,6 +106,14 @@ bun run build                  # build/daemon.js + dist/doobie (single binary)
 
 Design decisions and rationale: [docs/design-decisions.md](docs/design-decisions.md). Agent-facing reference:
 [docs/help.md](docs/help.md) (embedded verbatim in `doobie --help`).
+
+## Releasing
+
+Bump `version` in package.json, commit, then push a tag that is exactly `v<version>` (prereleases too: `1.2.0-rc.1`
+-> `v1.2.0-rc.1`). `release.yml` fails on a mismatch, builds the four binaries, smoke-tests `doobie-linux-x64
+--version`, checks the tarball contents, creates the GitHub release (marked prerelease when the tag contains `-`),
+and publishes to npm (`--tag next` for prereleases). `scripts/postinstall.cjs` and the `bin/doobie.cjs` shim download
+`doobie-<os>-<arch>` from that release and verify it against `SHA256SUMS`.
 
 ## License
 

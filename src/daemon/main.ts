@@ -190,7 +190,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<void> {
             }
           } else {
             for (const s of sources) {
-              const e = await manager.get(s, { timeoutMs: 20_000, idleTimeoutMs: DEFAULTS.idleTimeoutMs });
+              const e = await manager.get(s, { timeoutMs: 20_000 });
               payloads.push({ browser: e.key, pages: await e.pages.listPages() });
             }
           }

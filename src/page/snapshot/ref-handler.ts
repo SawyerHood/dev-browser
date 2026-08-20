@@ -11,6 +11,9 @@ import { Puppeteer } from "puppeteer-core";
 
 let registered = false;
 
+// NOTE: queryOne/queryAll are serialized (Function.toString) and evaluated in the page: they must be
+// self-contained (no closure over module helpers).
+
 export function registerRefQueryHandler(): void {
   if (registered) return;
   registered = true;
@@ -22,7 +25,16 @@ export function registerRefQueryHandler(): void {
       if (!api) return null;
       const el = api.ref(selector);
       if (!el) return null;
-      if (node.nodeType !== 9 && !(node as Element).contains(el)) return null;
+      // composed-tree containment: root.contains(el) crossing open shadow roots (host chain)
+      if (node.nodeType !== 9) {
+        let inside = false;
+        for (let n: Node | null = el; n; ) {
+          if (n === node) { inside = true; break; }
+          const p: Node | null = n.parentNode;
+          n = p && p.nodeType === 11 ? (p as ShadowRoot).host : p;
+        }
+        if (!inside) return null;
+      }
       return el;
     },
     queryAll: (node: Node, selector: string) => {
@@ -32,7 +44,16 @@ export function registerRefQueryHandler(): void {
       if (!api) return [];
       const el = api.ref(selector);
       if (!el) return [];
-      if (node.nodeType !== 9 && !(node as Element).contains(el)) return [];
+      // composed-tree containment: root.contains(el) crossing open shadow roots (host chain)
+      if (node.nodeType !== 9) {
+        let inside = false;
+        for (let n: Node | null = el; n; ) {
+          if (n === node) { inside = true; break; }
+          const p: Node | null = n.parentNode;
+          n = p && p.nodeType === 11 ? (p as ShadowRoot).host : p;
+        }
+        if (!inside) return [];
+      }
       return [el];
     },
   });

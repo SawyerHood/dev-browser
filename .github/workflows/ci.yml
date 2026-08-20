@@ -18,7 +18,19 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun x tsc --noEmit
       - name: Install Chrome for Testing
-        run: bun x @puppeteer/browsers install chrome@stable --path $HOME/.doobie/chrome
+        # The installer prints "chrome@<ver> <path>" as its last line (the macOS path
+        # contains spaces). Export the path as DOOBIE_CHROME so every test (CLI tests
+        # run with DOOBIE_HOME=<tmp>) and the bench use this pinned Chrome instead of
+        # whatever the runner image ships.
+        run: |
+          out=$(bun x @puppeteer/browsers install chrome@stable --path "$HOME/.doobie/chrome")
+          echo "$out"
+          chrome=$(echo "$out" | tail -n 1 | sed 's/^[^ ]* //')
+          test -x "$chrome" || { echo "Chrome for Testing binary not found at '$chrome'"; exit 1; }
+          echo "DOOBIE_CHROME=$chrome" >> "$GITHUB_ENV"
+      - name: Check DOOBIE_CHROME
+        run: |
+          test -n "$DOOBIE_CHROME" && "$DOOBIE_CHROME" --version
       - run: bun run build
       - run: bun run test
       - name: Benchmarks (Linux only; targets x2 for shared runners)
