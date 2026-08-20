@@ -56,28 +56,45 @@ export function needsNoSandbox(chromePath: string): boolean {
 }
 
 /**
- * Chrome restores the previous session when the last exit was not clean.
- * Puppeteer's close path often leaves exit_type "Crashed", so mark the
- * profile as cleanly exited before each launch. Returns true when patched
- * (or no previous session exists).
+ * Profile preferences doobie enforces before every launch:
+ * - exit_type "Normal": Chrome restores the previous session when the last
+ *   exit was not clean, and Puppeteer's close path often leaves "Crashed".
+ * - password-leak detection OFF: after a login with a publicly leaked
+ *   credential (every demo site), new-headless Chrome shows a tab-modal
+ *   "password found in a data breach" dialog that silently swallows all CDP
+ *   mouse/keyboard input for the rest of the page's life.
+ * - no save-password bubble, no autofill popups: browser widgets that can
+ *   take keyboard focus away from the page (Playwright's headless shell has
+ *   no such UI; Chrome's --headless=new does).
+ * Returns true when the file was written (or created for a fresh profile).
  */
-export function markCleanExit(userDataDir: string): boolean {
-  const prefs = path.join(userDataDir, "Default", "Preferences");
-  let raw: string;
+export function preparePrefs(userDataDir: string): boolean {
+  const dir = path.join(userDataDir, "Default");
+  const prefs = path.join(dir, "Preferences");
+  let json: Record<string, unknown> = {};
   try {
-    raw = fs.readFileSync(prefs, "utf8");
-  } catch {
-    return true; // no profile yet: nothing to restore
+    json = JSON.parse(fs.readFileSync(prefs, "utf8")) as Record<string, unknown>;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return false; // unreadable/corrupt: leave it
+    json = {};
   }
   try {
-    const json = JSON.parse(raw) as { profile?: Record<string, unknown>; session?: Record<string, unknown> };
-    json.profile = { ...(json.profile ?? {}), exit_type: "Normal", exited_cleanly: true };
+    const profile = (json.profile ?? {}) as Record<string, unknown>;
+    json.profile = { ...profile, exit_type: "Normal", exited_cleanly: true, password_manager_leak_detection: false, password_manager_enabled: false };
+    json.credentials_enable_service = false;
+    json.credentials_enable_autosignin = false;
+    const autofill = (json.autofill ?? {}) as Record<string, unknown>;
+    json.autofill = { ...autofill, profile_enabled: false, credit_card_enabled: false };
+    fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(prefs, JSON.stringify(json));
     return true;
   } catch {
     return false;
   }
 }
+
+/** @deprecated use preparePrefs */
+export const markCleanExit = preparePrefs;
 
 export function isSandboxError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
@@ -118,7 +135,7 @@ export async function launchBrowser(
     });
 
   const t0 = Date.now();
-  const cleanExitMarked = markCleanExit(userDataDir);
+  const cleanExitMarked = preparePrefs(userDataDir);
   const noSandbox = isRoot || needsNoSandbox(chrome.path);
   let browser: Browser;
   try {

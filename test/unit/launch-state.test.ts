@@ -16,20 +16,24 @@ afterAll(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test("markCleanExit patches Preferences exit_type and tolerates a missing profile", async () => {
-  const { markCleanExit } = await import("../../src/daemon/sources/launch.ts");
+test("preparePrefs creates/patches Preferences: clean exit, leak detection off, no password/autofill UI", async () => {
+  const { preparePrefs } = await import("../../src/daemon/sources/launch.ts");
   const dir = path.join(home, "p1");
-  expect(markCleanExit(dir)).toBe(true); // no profile yet
-  fs.mkdirSync(path.join(dir, "Default"), { recursive: true });
-  fs.writeFileSync(path.join(dir, "Default", "Preferences"), JSON.stringify({ profile: { exit_type: "Crashed", name: "x" }, other: 1 }));
-  expect(markCleanExit(dir)).toBe(true);
-  const j = JSON.parse(fs.readFileSync(path.join(dir, "Default", "Preferences"), "utf8"));
+  expect(preparePrefs(dir)).toBe(true); // fresh profile: file is created
+  let j = JSON.parse(fs.readFileSync(path.join(dir, "Default", "Preferences"), "utf8"));
+  expect(j.profile.password_manager_leak_detection).toBe(false);
+  expect(j.credentials_enable_service).toBe(false);
+  expect(j.autofill.profile_enabled).toBe(false);
+  fs.writeFileSync(path.join(dir, "Default", "Preferences"), JSON.stringify({ profile: { exit_type: "Crashed", name: "x" }, autofill: { keep: 1 }, other: 1 }));
+  expect(preparePrefs(dir)).toBe(true);
+  j = JSON.parse(fs.readFileSync(path.join(dir, "Default", "Preferences"), "utf8"));
   expect(j.profile.exit_type).toBe("Normal");
   expect(j.profile.exited_cleanly).toBe(true);
   expect(j.profile.name).toBe("x");
+  expect(j.autofill.keep).toBe(1);
   expect(j.other).toBe(1);
   fs.writeFileSync(path.join(dir, "Default", "Preferences"), "{not json");
-  expect(markCleanExit(dir)).toBe(false);
+  expect(preparePrefs(dir)).toBe(false);
 });
 
 test("needsNoSandbox reads the remembered set from launch-state.json", async () => {
