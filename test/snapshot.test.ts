@@ -198,7 +198,9 @@ test("track returns an incremental diff", async () => {
     const added = third.incremental.split("\n").filter((l) => l.startsWith("+ "));
     expect(added.length).toBeGreaterThanOrEqual(1);
     expect(added.some((l) => l.includes('button "Added"'))).toBe(true);
-    expect(third.incremental.split("\n").every((l) => l.startsWith("+ ") || l.startsWith("- "))).toBe(true);
+    // lines are +/-, one "  " context line before each hunk, "…" between hunks
+    expect(third.incremental.split("\n").every((l) => l.startsWith("+ ") || l.startsWith("- ") || l.startsWith("  ") || l === "…")).toBe(true);
+    expect(third.incremental.split("\n")[0]).toMatch(/^  /);
     expect(getSnapshotState(page).tracked.get("t")).toBe(third.full);
     // a different track name starts fresh
     const other = (await page.snapshot({ track: "u" })) as { full: string; incremental: string };
@@ -207,7 +209,9 @@ test("track returns an incremental diff", async () => {
 });
 
 test("diffLines produces +/- lines in order", () => {
-  expect(diffLines(["a", "b", "c"], ["a", "x", "c", "d"])).toBe("- b\n+ x\n+ d");
+  // one unchanged context line before each hunk, "…" between hunks
+  expect(diffLines(["a", "b", "c"], ["a", "x", "c", "d"])).toBe("  a\n- b\n+ x\n…\n  c\n+ d");
+  expect(diffLines(["a", "b"], ["x", "b"])).toBe("- a\n+ x");
   expect(diffLines(["a"], ["a"])).toBe("");
 });
 

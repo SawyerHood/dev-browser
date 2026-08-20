@@ -10,7 +10,18 @@ const path = require("node:path");
 const bin = path.join(__dirname, process.platform === "win32" ? "doobie-bin.exe" : "doobie-bin");
 if (fs.existsSync(bin)) {
   const r = spawnSync(bin, process.argv.slice(2), { stdio: "inherit" });
-  process.exit(r.status === null ? 1 : r.status);
+  if (r.status === null) {
+    // Could not run (musl vs glibc, CPU without AVX2, noexec mount, truncated download) or died by signal.
+    const why = r.error ? r.error.message : r.signal ? `killed by ${r.signal}` : "unknown error";
+    console.error(`doobie: could not run the prebuilt binary ${bin}: ${why}`);
+    console.error(
+      "doobie: hints: check `file " + bin + "` matches this OS/CPU (glibc x64/arm64 and macOS builds only; no musl/baseline yet);\n" +
+        "  on a noexec mount or unsupported CPU, install bun and run `DOOBIE_SKIP_DOWNLOAD=1 npm rebuild doobie`\n" +
+        "  (the shim then runs the TypeScript entry with bun), or build from source: https://github.com/SawyerHood/doobie",
+    );
+    process.exit(1);
+  }
+  process.exit(r.status);
 }
 // Dev checkout fallback: run the TypeScript entry with bun.
 const main = path.join(__dirname, "..", "src", "cli", "main.ts");
@@ -20,7 +31,11 @@ if (fs.existsSync(main)) {
     console.error("doobie: binary not installed and bun not found. Run `npm rebuild doobie` or install bun.");
     process.exit(1);
   }
-  process.exit(r.status === null ? 1 : r.status);
+  if (r.status === null) {
+    console.error(`doobie: bun failed to run ${main}: ${r.error ? r.error.message : r.signal ? `killed by ${r.signal}` : "unknown error"}`);
+    process.exit(1);
+  }
+  process.exit(r.status);
 }
 console.error("doobie: native binary missing. Reinstall with `npm install -g doobie` (set DOOBIE_SKIP_DOWNLOAD= to allow the download).");
 process.exit(1);

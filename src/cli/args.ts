@@ -12,6 +12,8 @@ export interface GlobalFlags {
   /** undefined = not given; "auto" = bare --connect; otherwise URL */
   connect?: string;
   headless?: boolean;
+  /** --ignore-https-errors: accept invalid TLS certificates (self-signed dev servers). */
+  ignoreHttpsErrors?: boolean;
   /** seconds */
   timeout?: number;
   json: boolean;
@@ -107,6 +109,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--headed":
         flags.headless = false;
+        break;
+      case "--ignore-https-errors":
+        flags.ignoreHttpsErrors = true;
         break;
       case "-t":
       case "--timeout": {

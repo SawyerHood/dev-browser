@@ -8,8 +8,8 @@
 import * as fs from "node:fs";
 import * as net from "node:net";
 import { spawn } from "node:child_process";
-import { findChrome, listChromeCandidates } from "../../shared/chrome.ts";
-import { paths, ensureHome, sanitizeName } from "../../shared/paths.ts";
+import { listChromeCandidates, type ChromeCandidate } from "../../shared/chrome.ts";
+import { paths, ensureHome } from "../../shared/paths.ts";
 import { EXIT_ERROR, EXIT_OK, EXIT_USAGE } from "../../shared/protocol.ts";
 
 function freePort(start: number): Promise<number> {
@@ -23,6 +23,19 @@ function freePort(start: number): Promise<number> {
     };
     tryPort(start);
   });
+}
+
+/**
+ * `doobie chrome` exists so Google/OAuth sign-in works, which rejects
+ * automation builds. So prefer the user's real browser: system Chrome first,
+ * then explicit overrides, and Chrome for Testing / Playwright only as a last
+ * resort (with a warning). This is the reverse of findChrome()'s order.
+ */
+export function pickChromeForUser(candidates: ChromeCandidate[]): ChromeCandidate | null {
+  const rank: Record<ChromeCandidate["source"], number> = { system: 0, env: 1, config: 2, installed: 3, playwright: 4 };
+  let best: ChromeCandidate | null = null;
+  for (const c of candidates) if (!best || rank[c.source] < rank[best.source]) best = c;
+  return best;
 }
 
 export async function chromeCommand(args: string[]): Promise<number> {
@@ -58,14 +71,23 @@ export async function chromeCommand(args: string[]): Promise<number> {
     for (const c of listChromeCandidates()) process.stdout.write(`${c.source.padEnd(10)} ${c.path}\n`);
     return EXIT_OK;
   }
-  const exe = chromePath ?? findChrome()?.path;
-  if (!exe) {
+  const picked = chromePath ? { path: chromePath, source: "env" as const } : pickChromeForUser(listChromeCandidates());
+  const exe = picked?.path;
+  if (!exe || !picked) {
     process.stderr.write("doobie chrome: no Chrome found. Pass --chrome /path/to/chrome or run `doobie install`.\n");
     return EXIT_ERROR;
   }
+  if (!chromePath && (picked.source === "installed" || picked.source === "playwright")) {
+    process.stderr.write(
+      `doobie chrome: no system Chrome found; using ${picked.source === "installed" ? "Chrome for Testing" : "Playwright's Chromium"} (${exe}).\n` +
+        "  Google sign-in may reject it. Install Google Chrome or pass --chrome /path/to/chrome.\n",
+    );
+  }
   ensureHome();
-  const userDataDir = paths.profile(sanitizeName(profile));
-  fs.mkdirSync(userDataDir, { recursive: true });
+  // Own root (chrome-profiles/NAME), never browsers/NAME/profile: a profile dir
+  // can hold one Chrome at a time, and `-b NAME` must stay launchable.
+  const userDataDir = paths.chromeProfile(profile);
+  fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
   const chosenPort = port ?? (await freePort(9222));
   const chromeArgs = [
     `--remote-debugging-port=${chosenPort}`,
@@ -88,6 +110,7 @@ export async function chromeCommand(args: string[]): Promise<number> {
   fs.writeFileSync(paths.chromePorts(), JSON.stringify(ports, null, 2), { mode: 0o600 });
   process.stdout.write(
     `launched Chrome (pid ${child.pid}) on port ${chosenPort} with profile ${userDataDir}\n` +
+      `chrome: ${exe}${chromePath ? "" : ` (${picked.source})`}\n` +
       `use:  doobie --connect ${chosenPort} -e 'await (await browser.getPage("main")).title()'\n` +
       `or:   doobie --connect   (auto-discovers this port)\n`,
   );

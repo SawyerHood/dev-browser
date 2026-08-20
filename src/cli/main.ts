@@ -92,12 +92,13 @@ export async function main(argv: string[]): Promise<number> {
 /* ------------------------------------------------------------------ */
 
 function sourceFromFlags(flags: GlobalFlags, config: DoobieConfig): BrowserSourceSpec {
+  const insecure = (flags.ignoreHttpsErrors ?? config.ignoreHttpsErrors) ? { ignoreHTTPSErrors: true } : {};
   if (flags.connect !== undefined) {
     if (flags.connect.startsWith("unix:") || flags.connect.startsWith("pipe:")) return { kind: "socket", path: flags.connect };
-    return { kind: "cdp", url: flags.connect };
+    return { kind: "cdp", url: flags.connect, ...insecure };
   }
   const headless = flags.headless ?? config.headless ?? false;
-  return { kind: "launch", name: flags.browser ?? "default", headless };
+  return { kind: "launch", name: flags.browser ?? "default", headless, ...insecure };
 }
 
 async function readScript(flags: GlobalFlags, file?: string): Promise<{ script: string; name: string } | null> {

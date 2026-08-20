@@ -175,7 +175,7 @@ describe("--json", () => {
     const frames = r.stdout.trim().split("\n").map((l) => JSON.parse(l));
     expect(frames).toContainEqual({ type: "stdout", data: "a\n" });
     expect(frames).toContainEqual({ type: "stderr", data: "b\n" });
-    expect(frames).toContainEqual({ type: "result", value: '{\n  "v": 1\n}' });
+    expect(frames).toContainEqual({ type: "result", value: '{\n  "v": 1\n}', data: { v: 1 } });
     const done = frames[frames.length - 1];
     expect(done.type).toBe("done");
     expect(done.exitCode).toBe(0);

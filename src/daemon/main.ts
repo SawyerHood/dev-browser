@@ -41,6 +41,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<void> {
   let closing = false;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
   let ownsEndpoint = false;
+  let socketIno: number | null = null;
 
   const server = net.createServer();
 
@@ -57,32 +58,55 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<void> {
   };
   manager.onEmpty = scheduleIdleExit;
 
+  /**
+   * Release the endpoint synchronously, and only what is still ours: the pid
+   * file if it holds our pid, the socket path if it is the inode we bound.
+   * Must run BEFORE anything async in shutdown: a client that connects right
+   * after `doobie stop` spawns the next daemon within milliseconds, and a
+   * late unlink would delete that daemon's socket (leaving it orphaned).
+   */
+  const releaseEndpoint = () => {
+    if (!ownsEndpoint) return;
+    ownsEndpoint = false;
+    try {
+      if (fs.readFileSync(paths.pid(), "utf8").trim() === String(process.pid)) fs.unlinkSync(paths.pid());
+    } catch {
+      /* gone or not ours */
+    }
+    try {
+      if (socketIno !== null && fs.statSync(socketPath).ino === socketIno) fs.unlinkSync(socketPath);
+    } catch {
+      /* gone or not ours */
+    }
+  };
+
   const shutdown = async (code: number) => {
     if (closing) return;
     closing = true;
     log.info("shutting down");
-    server.close();
+    releaseEndpoint();
+    // Deliberately no server.close(): Bun unlinks the listen path on close,
+    // which would remove a successor daemon's socket. The path is already
+    // unlinked above; process.exit() below closes the listening fd without
+    // touching the filesystem.
     try {
       await manager.stopAll();
     } catch (err) {
       log.warn("stopAll failed", err);
     }
-    if (ownsEndpoint) {
-      try {
-        fs.unlinkSync(socketPath);
-      } catch {
-        /* gone */
-      }
-      try {
-        fs.unlinkSync(paths.pid());
-      } catch {
-        /* gone */
-      }
-    }
     setTimeout(() => process.exit(code), 50).unref();
   };
 
   server.on("connection", (sock) => {
+    if (closing) {
+      // Endpoint already released; whoever still reaches us raced the unlink.
+      sock.end(
+        encodeFrame({ type: "hello", version: VERSION, protocol: PROTOCOL_VERSION, pid: process.pid }) +
+          encodeFrame({ type: "error", kind: "daemon", name: "DaemonError", message: "daemon is shutting down; re-run the command" }) +
+          encodeFrame({ type: "done", exitCode: EXIT_ERROR, durationMs: 0 }),
+      );
+      return;
+    }
     sock.setEncoding("utf8");
     const decoder = new LineDecoder<HelloFromClient | Request>(MAX_REQUEST_CHARS);
     const send = (frame: Frame) => {
@@ -256,6 +280,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<void> {
   ownsEndpoint = true;
   try {
     fs.chmodSync(socketPath, 0o600);
+    socketIno = fs.statSync(socketPath).ino;
   } catch {
     /* ignore */
   }

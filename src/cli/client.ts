@@ -71,8 +71,10 @@ export function isCompiled(): boolean {
 /* Socket wrapper over Bun.connect                                     */
 /* ------------------------------------------------------------------ */
 
-interface Conn {
-  write(data: string): void;
+export interface Conn {
+  /** Queue data for sending; honors socket backpressure (see `createConn`). */
+  write(data: string | Uint8Array): void;
+  /** Half-close once everything queued has been flushed. */
   end(): void;
   destroy(): void;
   onData(cb: (chunk: Uint8Array) => void): void;
@@ -82,11 +84,69 @@ interface Conn {
 
 type Handlers = { data?: (c: Uint8Array) => void; close?: () => void; error?: (e: Error) => void };
 
-function tryConnect(socketPath: string, timeoutMs: number): Promise<Conn | null> {
+/**
+ * Wrap a Bun socket. `Socket.write` returns the number of bytes the kernel
+ * accepted and silently drops the rest once the send buffer is full (~200 KB
+ * for a Unix socket), so anything larger than that (a script with embedded
+ * data, a long --eval) must be queued and flushed from the `drain` callback.
+ */
+function createConn(s: Socket<unknown>, h: Handlers): Conn & { drain(): void } {
+  const queue: Uint8Array[] = [];
+  let endWhenFlushed = false;
+  let closed = false;
+  const flush = (): void => {
+    while (queue.length > 0) {
+      const head = queue[0]!;
+      let n: number;
+      try {
+        n = s.write(head);
+      } catch {
+        return; // socket gone; the close/error handlers report it
+      }
+      if (n < head.byteLength) {
+        if (n > 0) queue[0] = head.subarray(n);
+        return; // wait for drain
+      }
+      queue.shift();
+    }
+    if (endWhenFlushed && !closed) {
+      closed = true;
+      s.end();
+    }
+  };
+  return {
+    write: (d) => {
+      if (closed) return;
+      const bytes = typeof d === "string" ? new TextEncoder().encode(d) : d;
+      if (bytes.byteLength === 0) return;
+      queue.push(bytes);
+      if (queue.length === 1) flush(); // otherwise a drain is already pending
+    },
+    end: () => {
+      endWhenFlushed = true;
+      if (queue.length === 0 && !closed) {
+        closed = true;
+        s.end();
+      }
+    },
+    destroy: () => {
+      closed = true;
+      queue.length = 0;
+      s.terminate();
+    },
+    onData: (cb) => (h.data = cb),
+    onClose: (cb) => (h.close = cb),
+    onError: (cb) => (h.error = cb),
+    drain: flush,
+  };
+}
+
+export function tryConnect(socketPath: string, timeoutMs: number): Promise<Conn | null> {
   return new Promise((resolve) => {
     const h: Handlers = {};
     let settled = false;
     let sock: Socket<undefined> | null = null;
+    let conn: (Conn & { drain(): void }) | null = null;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -104,14 +164,11 @@ function tryConnect(socketPath: string, timeoutMs: number): Promise<Conn | null>
           }
           settled = true;
           clearTimeout(timer);
-          resolve({
-            write: (d) => void s.write(d),
-            end: () => s.end(),
-            destroy: () => s.terminate(),
-            onData: (cb) => (h.data = cb),
-            onClose: (cb) => (h.close = cb),
-            onError: (cb) => (h.error = cb),
-          });
+          conn = createConn(s, h);
+          resolve(conn);
+        },
+        drain() {
+          conn?.drain();
         },
         data(_s, chunk) {
           h.data?.(chunk);
@@ -151,7 +208,13 @@ function acquireSpawnLock(): boolean {
     fs.writeSync(fd, String(process.pid));
     fs.closeSync(fd);
     return true;
-  } catch {
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST") {
+      throw new Error(
+        `cannot write to DOOBIE_HOME ${paths.home()} (${code ?? (err as Error).message}). Fix its permissions or point DOOBIE_HOME at a writable directory.`,
+      );
+    }
     try {
       const st = fs.statSync(lock);
       const pid = Number(fs.readFileSync(lock, "utf8").trim());

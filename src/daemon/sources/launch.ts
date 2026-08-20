@@ -28,8 +28,14 @@ export async function launchBrowser(
 ): Promise<LaunchResult> {
   const chrome = findChrome();
   if (!chrome) throw new ChromeNotFoundError();
-  const userDataDir = paths.profile(spec.name);
-  const baseArgs = ["--no-first-run", "--no-default-browser-check", "--disable-search-engine-choice-screen"];
+  const userDataDir = paths.profile(spec.name, spec.headless, spec.ignoreHTTPSErrors);
+  const baseArgs = [
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-search-engine-choice-screen",
+    // Restored sessions are closed by BrowserManager; never show the bubble.
+    "--hide-crash-restore-bubble",
+  ];
   if (!spec.headless) baseArgs.push("--window-size=1280,900");
   const isRoot = os.platform() === "linux" && typeof process.getuid === "function" && process.getuid() === 0;
 
@@ -39,6 +45,7 @@ export async function launchBrowser(
       headless: spec.headless,
       userDataDir,
       defaultViewport: spec.headless ? DEFAULTS.headlessViewport : null,
+      acceptInsecureCerts: spec.ignoreHTTPSErrors === true,
       args: [...baseArgs, ...extra],
       protocolTimeout: PROTOCOL_TIMEOUT_MS,
       timeout: Math.max(1000, Math.min(opts.timeoutMs, 60_000)),
@@ -59,9 +66,10 @@ export async function launchBrowser(
       throw err;
     }
   }
-  log.info(`launched ${spec.name} (${spec.headless ? "headless" : "headed"}) in ${Date.now() - t0}ms`, {
+  log.info(`launched ${spec.name} (${spec.headless ? "headless" : "headed"}${spec.ignoreHTTPSErrors ? ", insecure certs accepted" : ""}) in ${Date.now() - t0}ms`, {
     chrome: chrome.path,
     source: chrome.source,
+    profile: userDataDir,
   });
   return { browser, executablePath: chrome.path };
 }

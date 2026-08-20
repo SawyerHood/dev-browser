@@ -1,5 +1,5 @@
 /**
- * In-page snapshot script. Evaluated as a string in the MAIN realm of a frame.
+ * In-page snapshot script. Evaluated as a string in Puppeteer's ISOLATED realm of a frame.
  * Installs window.__doobie (idempotent). See ./index.ts for the contract.
  *
  * Port of do-browser's ariaSnapshot.ts (itself a port of Playwright's injected
@@ -8,16 +8,19 @@
  *
  * window.__doobie = {
  *   version,
- *   snapshot(opts) -> { yaml, refs, truncated, droppedLines, iframes: [{ ref, line }] }
+ *   snapshot(opts) -> { yaml, refs, truncated, droppedLines, iframes: [{ ref, line, origin: [x, y] }] }
+ *     opts: { scope, interactive, depth, boxes, urls, maxChars, refPrefix, boxOffset: [x, y] }
+ *     boxOffset is added to every [box=...] (the iframe's content origin in main-viewport px,
+ *     passed by the host for nested frames) so boxes are always main-viewport coordinates.
  *   ref(id)        -> Element | null   (accepts "e5" or "f1e5")
- *   box(id)        -> [x, y, w, h] | null
+ *   box(id)        -> [x, y, w, h] | null   (frame-local viewport px)
  * }
  *
  * NOTE: written with String.raw so regexes read like normal JS. Do not use
  * backticks or "${" inside the script body.
  */
 
-export const INPAGE_VERSION = 1;
+export const INPAGE_VERSION = 2;
 
 export const INPAGE_SCRIPT: string = String.raw`(() => {
   if (window.__doobie && window.__doobie.version === ${INPAGE_VERSION}) return;
@@ -341,6 +344,7 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     }
     return accessibleName;
   }
+  const kDescendantNameFromContentRoles = ["","caption","code","contentinfo","definition","deletion","emphasis","insertion","list","listitem","mark","none","paragraph","presentation","region","row","rowgroup","section","strong","subscript","superscript","table","term","time","generic"];
   const kNameFromContentRoles = ["button","cell","checkbox","columnheader","gridcell","heading","link","menuitem","menuitemcheckbox","menuitemradio","option","radio","row","rowheader","switch","tab","tooltip","treeitem"];
   function getTextAlternativeInternal(element, options) {
     if (options.visitedElements.has(element)) return "";
@@ -392,7 +396,44 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
         }
       }
     }
-    const allowsNameFromContent = kNameFromContentRoles.includes(role);
+    // 2e: embedded control inside a label / labelledby target contributes its value.
+    if (!!options.embeddedInLabel || !!options.embeddedInLabelledBy) {
+      const isOwnLabel = [...(element.labels || [])].includes(options.embeddedInLabel && options.embeddedInLabel.element);
+      const isOwnLabelledBy = (getAriaLabelledByElements(element) || []).includes(options.embeddedInLabelledBy && options.embeddedInLabelledBy.element);
+      if (!isOwnLabel && !isOwnLabelledBy) {
+        if (role === "textbox") {
+          options.visitedElements.add(element);
+          if (tagName === "INPUT" || tagName === "TEXTAREA") return element.value;
+          return element.textContent || "";
+        }
+        if (["combobox","listbox"].includes(role)) {
+          options.visitedElements.add(element);
+          let selectedOptions;
+          if (tagName === "SELECT") {
+            selectedOptions = [...element.selectedOptions];
+            if (!selectedOptions.length && element.options.length) selectedOptions.push(element.options[0]);
+          } else {
+            const listbox = role === "combobox" ? [...element.querySelectorAll("*")].find(e => getAriaRole(e) === "listbox") : element;
+            selectedOptions = listbox ? [...listbox.querySelectorAll('[aria-selected="true"]')].filter(e => getAriaRole(e) === "option") : [];
+          }
+          if (!selectedOptions.length && tagName === "INPUT") return element.value;
+          return selectedOptions.map(option => getTextAlternativeInternal(option, childOptions)).join(" ");
+        }
+        if (["progressbar","scrollbar","slider","spinbutton","meter"].includes(role)) {
+          options.visitedElements.add(element);
+          const valueText = element.getAttribute("aria-valuetext");
+          if (valueText) return valueText;
+          const valueNow = element.getAttribute("aria-valuenow");
+          if (valueNow) return valueNow;
+          if (tagName === "INPUT") return element.value;
+          return "";
+        }
+        if (role === "menu") { options.visitedElements.add(element); return ""; }
+      }
+    }
+    // 2f: name from content. Playwright's allowsNameFromContent(role, targetDescendant): a descendant of a
+    // naming element contributes its text even when its own role (span/div/p/strong/li/...) would not.
+    const allowsNameFromContent = kNameFromContentRoles.includes(role) || (options.embeddedInTargetElement === "descendant" && kDescendantNameFromContentRoles.includes(role));
     if (allowsNameFromContent || !!options.embeddedInLabelledBy || !!options.embeddedInLabel) {
       options.visitedElements.add(element);
       const accessibleName = innerAccumulatedElementText(element, childOptions);
@@ -559,15 +600,30 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
   }
 
   const INTERACTIVE_ROLES = new Set(["link","button","textbox","checkbox","radio","combobox","listbox","option","menuitem","menuitemcheckbox","menuitemradio","tab","switch","slider","searchbox","spinbutton","treeitem","scrollbar"]);
+  // Always kept in interactive mode together with their text: feedback an agent needs to verify an action.
+  const FEEDBACK_ROLES = new Set(["alert","alertdialog","status","log","marquee","timer","tooltip"]);
   const CONTEXT_ROLES = new Set(["banner","navigation","main","complementary","contentinfo","region","search","form","dialog","alertdialog","heading","tablist","menu","menubar","radiogroup","toolbar","tree","treegrid","grid","table","row","article","iframe"]);
 
   function isInteractiveNode(node) {
     if (INTERACTIVE_ROLES.has(node.role)) return true;
     if (node.role === "iframe") return true;
-    if (node.box && node.box.cursor === "pointer") return true;
+    // A pointer cursor marks an element as clickable only where it is not inherited from a clickable ancestor.
+    if (node.box && node.box.cursor === "pointer" && !node.pointerInherited) return true;
     const el = node.element;
     if (el && (el.hasAttribute("onclick") || el.isContentEditable)) return true;
     return false;
+  }
+  function isFeedbackNode(node) {
+    if (FEEDBACK_ROLES.has(node.role)) return true;
+    const el = node.element;
+    if (!el) return false;
+    const live = el.getAttribute("aria-live");
+    return !!live && live.toLowerCase() !== "off";
+  }
+  // Own (non-inherited) reason to be clickable: click handler, tabindex, or a pointer cursor set on this element.
+  function hasOwnInteractivity(element, box, pointerInherited) {
+    if (element.hasAttribute("onclick") || hasTabIndex(element)) return true;
+    return !!box && box.cursor === "pointer" && !pointerInherited;
   }
 
   // === tree generation ===
@@ -578,7 +634,7 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
       iframeRefs: []
     };
 
-    const visit = (ariaNode, node, parentElementVisible) => {
+    const visit = (ariaNode, node, parentElementVisible, pointerInherited) => {
       if (visited.has(node)) return;
       visited.add(node);
       if (node.nodeType === 3 && node.nodeValue) {
@@ -598,13 +654,16 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
           if (ownedElement) ariaChildren.push(ownedElement);
         }
       }
-      const childAriaNode = visible ? toAriaNode(element, options) : null;
+      const childAriaNode = visible ? toAriaNode(element, options, pointerInherited) : null;
       if (childAriaNode) ariaNode.children.push(childAriaNode);
       if (element.nodeName === "IFRAME" || element.nodeName === "FRAME") return;
-      processElement(childAriaNode || ariaNode, element, ariaChildren, visible);
+      if (childAriaNode && childAriaNode.editableText !== undefined) return; // contenteditable textbox: value shown, DOM children skipped
+      // Descendants of an element that already shows [cursor=pointer] inherit the cursor; they are not clickable on their own.
+      const childPointerInherited = pointerInherited || !!(childAriaNode && childAriaNode.box && childAriaNode.box.cursor === "pointer") || getElementComputedStyle(element)?.cursor === "pointer";
+      processElement(childAriaNode || ariaNode, element, ariaChildren, visible, childPointerInherited);
     };
 
-    function processElement(ariaNode, element, ariaChildren, parentElementVisible) {
+    function processElement(ariaNode, element, ariaChildren, parentElementVisible, pointerInherited) {
       const style = getElementComputedStyle(element);
       const display = (style && style.display) || "inline";
       const treatAsBlock = display !== "inline" || element.nodeName === "BR" ? " " : "";
@@ -612,25 +671,25 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
       ariaNode.children.push(getCSSContent(element, "::before") || "");
       const assignedNodes = element.nodeName === "SLOT" ? element.assignedNodes() : [];
       if (assignedNodes.length) {
-        for (const child of assignedNodes) visit(ariaNode, child, parentElementVisible);
+        for (const child of assignedNodes) visit(ariaNode, child, parentElementVisible, pointerInherited);
       } else {
         for (let child = element.firstChild; child; child = child.nextSibling) {
-          if (!child.assignedSlot) visit(ariaNode, child, parentElementVisible);
+          if (!child.assignedSlot) visit(ariaNode, child, parentElementVisible, pointerInherited);
         }
         if (element.shadowRoot) {
-          for (let child = element.shadowRoot.firstChild; child; child = child.nextSibling) visit(ariaNode, child, parentElementVisible);
+          for (let child = element.shadowRoot.firstChild; child; child = child.nextSibling) visit(ariaNode, child, parentElementVisible, pointerInherited);
         }
       }
-      for (const child of ariaChildren) visit(ariaNode, child, parentElementVisible);
+      for (const child of ariaChildren) visit(ariaNode, child, parentElementVisible, pointerInherited);
       ariaNode.children.push(getCSSContent(element, "::after") || "");
       if (treatAsBlock) ariaNode.children.push(treatAsBlock);
       if (ariaNode.children.length === 1 && ariaNode.name === ariaNode.children[0]) ariaNode.children = [];
-      if (ariaNode.role === "link" && element.hasAttribute("href")) ariaNode.props["url"] = element.getAttribute("href");
+      if (ariaNode.role === "link" && element.hasAttribute("href") && options.urls !== false) ariaNode.props["url"] = element.getAttribute("href");
       if (ariaNode.role === "textbox" && element.hasAttribute("placeholder") && element.getAttribute("placeholder") !== ariaNode.name) ariaNode.props["placeholder"] = element.getAttribute("placeholder");
     }
 
     beginAriaCaches();
-    try { visit(snapshot.root, rootElement, true); }
+    try { visit(snapshot.root, rootElement, true, false); }
     finally { endAriaCaches(); }
     normalizeStringChildren(snapshot.root);
     normalizeGenericRoles(snapshot.root);
@@ -638,6 +697,9 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
   }
 
   function shouldHaveRef(ariaNode) {
+    // A generic under an element that already carries the pointer ref (link/button/clickable div) is not a
+    // separate click target: no ref unless it is clickable on its own.
+    if (ariaNode.role === "generic" && ariaNode.pointerInherited && !hasOwnInteractivity(ariaNode.element, ariaNode.box, true)) return false;
     if (ariaNode.box.visible && ariaNode.receivesPointerEvents) return true;
     if (INTERACTIVE_ROLES.has(ariaNode.role)) {
       if (ariaNode.role === "option" && ariaNode.element.closest("select,datalist")) return false;
@@ -661,11 +723,11 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     ariaNode.ref = (options.refPrefix || "") + ariaRef.ref;
   }
 
-  function toAriaNode(element, options) {
+  function toAriaNode(element, options, pointerInherited) {
     const doc = element.ownerDocument;
     const active = doc.activeElement === element && element !== doc.body;
     if (element.nodeName === "IFRAME" || element.nodeName === "FRAME") {
-      const ariaNode = { role: "iframe", name: "", children: [], props: {}, element, box: computeBox(element), receivesPointerEvents: true, active };
+      const ariaNode = { role: "iframe", name: "", children: [], props: {}, element, box: computeBox(element), receivesPointerEvents: true, active, pointerInherited };
       computeAriaRef(ariaNode, options);
       return ariaNode;
     }
@@ -674,8 +736,9 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     const name = normalizeWhiteSpace(getElementAccessibleName(element, false) || "");
     const receivesPointerEventsValue = receivesPointerEvents(element);
     const box = computeBox(element);
-    if (role === "generic" && box.inline && element.childNodes.length === 1 && element.childNodes[0].nodeType === 3 && box.cursor !== "pointer" && !element.hasAttribute("onclick")) return null;
-    const result = { role, name, children: [], props: {}, element, box, receivesPointerEvents: receivesPointerEventsValue, active };
+    // Inline span with a single text node: inline its text into the parent unless it is clickable on its own.
+    if (role === "generic" && box.inline && element.childNodes.length === 1 && element.childNodes[0].nodeType === 3 && !hasOwnInteractivity(element, box, pointerInherited)) return null;
+    const result = { role, name, children: [], props: {}, element, box, receivesPointerEvents: receivesPointerEventsValue, active, pointerInherited };
     computeAriaRef(result, options);
     if (kAriaCheckedRoles.includes(role)) result.checked = getAriaChecked(element);
     if (kAriaDisabledRoles.includes(role)) result.disabled = getAriaDisabled(element);
@@ -686,6 +749,12 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
       const t = element.type;
       if (t !== "checkbox" && t !== "radio" && t !== "file" && t !== "password" && t !== "hidden") result.children = [element.value];
+    } else if (role === "textbox" && element.isContentEditable) {
+      // contenteditable editor (ProseMirror, Quill, Gmail compose...): show its text as the value.
+      let text = normalizeWhiteSpace(element.innerText || element.textContent || "");
+      if (text.length > 2000) text = text.slice(0, 2000) + "\u2026";
+      result.editableText = text;
+      result.children = text ? [text] : [];
     }
     return result;
   }
@@ -727,16 +796,21 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
   }
 
   // interactive mode: keep interactive nodes + heading/landmark ancestors with kept descendants.
+  // Feedback (alert/status/log/tooltip/aria-live) and dialog text are kept verbatim: that is what an agent verifies.
   function pruneInteractive(root) {
     const prune = (node, inInteractive) => {
       const out = [];
       for (const child of node.children) {
         if (typeof child === "string") { if (inInteractive) out.push(child); continue; }
+        if (isFeedbackNode(child)) { out.push(child); continue; }
         const inter = isInteractiveNode(child);
         const ctx = CONTEXT_ROLES.has(child.role);
-        const kids = prune(child, inter ? true : (ctx ? false : inInteractive));
+        const dialog = child.role === "dialog" || child.role === "alertdialog";
+        const kids = prune(child, inter || dialog ? true : (ctx ? false : inInteractive));
         if (inter || child.role === "heading") { child.children = kids; out.push(child); }
+        else if (dialog) { child.children = kids; out.push(child); }
         else if (ctx && kids.length) { child.children = kids; out.push(child); }
+        else if (child.role === "paragraph" && inInteractive) { child.children = kids; out.push(child); }
         else out.push(...kids);
       }
       return out;
@@ -751,13 +825,15 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     const iframes = [];
     let refCount = 0;
     const maxDepth = options.depth > 0 ? options.depth : 0;
+    const offX = options.boxOffset ? options.boxOffset[0] || 0 : 0;
+    const offY = options.boxOffset ? options.boxOffset[1] || 0 : 0;
     const nodesToRender = ariaSnapshot.root.role === "fragment" ? ariaSnapshot.root.children : [ariaSnapshot.root];
 
     const visitText = (text, indent) => {
       const escaped = yamlEscapeValueIfNeeded(text);
       if (escaped) lines.push(indent + "- text: " + escaped);
     };
-    const createKey = (ariaNode, renderCursorPointer) => {
+    const createKey = (ariaNode, renderCursorPointer, depthCut) => {
       let key = ariaNode.role;
       if (ariaNode.name && ariaNode.name.length <= 900) {
         const name = ariaNode.name;
@@ -778,18 +854,26 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
         key += " [ref=" + ariaNode.ref + "]";
         if (options.boxes && ariaNode.box && ariaNode.box.rect) {
           const r = ariaNode.box.rect;
-          key += " [box=" + Math.round(r.left) + "," + Math.round(r.top) + "," + Math.round(r.width) + "," + Math.round(r.height) + "]";
+          key += " [box=" + Math.round(r.left + offX) + "," + Math.round(r.top + offY) + "," + Math.round(r.width) + "," + Math.round(r.height) + "]";
         }
         if (renderCursorPointer && hasPointerCursor(ariaNode)) key += " [cursor=pointer]";
       }
+      if (depthCut) key += " [\u2026]"; // children hidden by opts.depth; scope into this ref to see them
       return key;
     };
     const visit = (ariaNode, indent, renderCursorPointer, level) => {
-      const escapedKey = indent + "- " + yamlEscapeKeyIfNeeded(createKey(ariaNode, renderCursorPointer));
-      const children = maxDepth && level >= maxDepth ? ariaNode.children.filter(c => typeof c === "string") : ariaNode.children;
+      const atDepthLimit = !!maxDepth && level >= maxDepth;
+      const children = atDepthLimit ? ariaNode.children.filter(c => typeof c === "string") : ariaNode.children;
+      const depthCut = atDepthLimit && children.length !== ariaNode.children.length;
+      const escapedKey = indent + "- " + yamlEscapeKeyIfNeeded(createKey(ariaNode, renderCursorPointer, depthCut));
       const propKeys = Object.keys(ariaNode.props);
       const singleInlinedTextChild = children.length === 1 && typeof children[0] === "string" && !propKeys.length ? children[0] : undefined;
-      if (ariaNode.role === "iframe" && ariaNode.ref) iframes.push({ ref: ariaNode.ref, line: lines.length });
+      if (ariaNode.role === "iframe" && ariaNode.ref) {
+        const r = ariaNode.box && ariaNode.box.rect;
+        const el = ariaNode.element;
+        const origin = r ? [Math.round(r.left + offX + (el.clientLeft || 0)), Math.round(r.top + offY + (el.clientTop || 0))] : [offX, offY];
+        iframes.push({ ref: ariaNode.ref, line: lines.length, origin });
+      }
       if (!children.length && !propKeys.length) {
         lines.push(escapedKey);
       } else if (singleInlinedTextChild !== undefined) {

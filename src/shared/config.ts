@@ -15,6 +15,8 @@ export interface DoobieConfig {
   chrome?: string;
   /** Default request deadline in seconds. */
   timeout?: number;
+  /** Accept self-signed / invalid TLS certificates by default (`--ignore-https-errors`). */
+  ignoreHttpsErrors?: boolean;
 }
 
 export const DEFAULTS = {

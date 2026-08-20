@@ -4,23 +4,32 @@
  * One absolute deadline covers browser connect + script + teardown. Output
  * after the terminal frame is dropped. Concurrent runs are allowed; only
  * browser connect is serialized (in BrowserManager).
+ *
+ * Run guard: the script never sees raw Page objects. browser.getPage/newPage
+ * hand out a Proxy bound to a per-run gate; once the run is over (normal end,
+ * deadline or client disconnect) every further method call throws
+ * RunAbortedError, so a zombie script dies at its next await instead of
+ * mutating the page under the next script. The gate also records in-flight
+ * calls (for the timeout message), listeners added with page.on/once (removed
+ * at run end) and timers created through the sandbox globals (cleared at run
+ * end).
  */
 import * as vm from "node:vm";
 import * as fs from "node:fs";
 import * as util from "node:util";
 import type { Page, ConsoleMessage } from "puppeteer-core";
-import type { ErrorFrame, Frame, PageInfo, RunRequest } from "../shared/protocol.ts";
+import type { ErrorFrame, Frame, PageInfo, ResultFrame, RunRequest } from "../shared/protocol.ts";
 import { EXIT_ERROR, EXIT_OK, EXIT_TIMEOUT } from "../shared/protocol.ts";
 import { DEFAULTS } from "../shared/config.ts";
 import { ensureHome, jailPath } from "../shared/paths.ts";
 import type { FileLogger } from "../shared/log.ts";
 import type { BrowserManager, BrowserEntry } from "./browsers.ts";
-import { transformScript, ScriptSyntaxError } from "./transform.ts";
+import { transformScript, ScriptSyntaxError, type TransformResult } from "./transform.ts";
 import { formatScriptError } from "./errors.ts";
 import { ChromeNotFoundError } from "../shared/chrome.ts";
 import { CdpConnectError } from "./sources/cdp.ts";
 import type { ShotResult } from "../page/shot.ts";
-import { withRun } from "./run-context.ts";
+import { withRun, addPageLineHook } from "./run-context.ts";
 
 export interface RunContext {
   manager: BrowserManager;
@@ -35,9 +44,20 @@ export interface RunOutcome {
 }
 
 class DeadlineError extends Error {
-  constructor(readonly seconds: number) {
-    super(`Timed out after ${seconds}s (deadline)`);
+  constructor(
+    readonly seconds: number,
+    inflight?: string,
+  ) {
+    super(`Timed out after ${seconds}s (deadline)${inflight ? ` while in ${inflight}` : ""}`);
     this.name = "TimeoutError";
+  }
+}
+
+/** Thrown to a script that keeps running after its run ended (deadline, disconnect or normal end). */
+export class RunAbortedError extends Error {
+  constructor(reason: string) {
+    super(`script ${reason}`);
+    this.name = "RunAbortedError";
   }
 }
 
@@ -50,14 +70,28 @@ function isPage(v: unknown): v is Page {
   return !!v && typeof v === "object" && typeof (v as { mainFrame?: unknown }).mainFrame === "function" && typeof (v as { url?: unknown }).url === "function";
 }
 
-/** Replace Puppeteer objects with short tags so console/return output stays small. */
-function tame(v: unknown, depth = 0): unknown {
+/**
+ * Replace Puppeteer objects with short tags so console/return output stays
+ * small, and normalise vm-realm values (Error/Map/Set/typed arrays from the
+ * script's context fail `instanceof` checks here) into printable shapes.
+ */
+export function tame(v: unknown, depth = 0): unknown {
   if (isJSHandle(v)) return v.asElement() ? "[ElementHandle]" : "[JSHandle]";
-  if (isPage(v)) return `[Page ${(v as Page).url()}]`;
-  if (v instanceof Uint8Array) return `<Buffer ${v.byteLength} bytes>`;
+  if (isPage(v)) return `[Page ${safeUrl(v as Page)}]`;
+  if (ArrayBuffer.isView(v)) return `<Buffer ${v.byteLength} bytes>`;
   if (depth > 6 || v === null || typeof v !== "object") return v;
+  if (util.types.isNativeError(v)) {
+    const e = v as Error;
+    return `${e.name || "Error"}: ${e.message}`;
+  }
   if (Array.isArray(v)) return v.map((x) => tame(x, depth + 1));
-  if (v instanceof Map || v instanceof Set || v instanceof Date || v instanceof RegExp || v instanceof Error) return v;
+  if (util.types.isMap(v)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of v as Map<unknown, unknown>) out[typeof k === "string" ? k : String(k)] = tame(val, depth + 1);
+    return out;
+  }
+  if (util.types.isSet(v)) return [...(v as Set<unknown>)].map((x) => tame(x, depth + 1));
+  if (util.types.isDate(v) || util.types.isRegExp(v) || util.types.isPromise(v)) return v;
   const proto = Object.getPrototypeOf(v);
   if (proto !== null && proto !== Object.prototype && !isPlainLike(v)) return v;
   const out: Record<string, unknown> = {};
@@ -75,28 +109,239 @@ export function formatConsoleArgs(args: unknown[]): string {
   return util.formatWithOptions(INSPECT, ...(tamed as [unknown, ...unknown[]]));
 }
 
-export function formatResult(value: unknown): string | undefined {
+/** Display text plus, when the value is JSON-serializable, the structured value for --json consumers. */
+export function renderResult(value: unknown): { text: string; data?: unknown } | undefined {
   if (value === undefined) return undefined;
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return { text: value, data: value };
   const t = tame(value);
-  if (typeof t === "string") return t;
+  if (typeof t === "string") return { text: t, data: t };
   try {
     const json = JSON.stringify(
       t,
       (_k, v: unknown) => {
         if (typeof v === "bigint") return v.toString() + "n";
-        if (v instanceof Map) return Object.fromEntries(v);
-        if (v instanceof Set) return [...v];
-        if (v instanceof Error) return { name: v.name, message: v.message };
+        if (util.types.isMap(v)) return Object.fromEntries(v as Map<string, unknown>);
+        if (util.types.isSet(v)) return [...(v as Set<unknown>)];
+        if (util.types.isNativeError(v)) return `${(v as Error).name}: ${(v as Error).message}`;
         return v;
       },
       2,
     );
-    if (json !== undefined) return json;
+    if (json !== undefined) return { text: json, data: JSON.parse(json) as unknown };
   } catch {
     /* circular or exotic: fall through */
   }
-  return util.inspect(t, INSPECT);
+  return { text: util.inspect(t, INSPECT) };
+}
+
+export function formatResult(value: unknown): string | undefined {
+  return renderResult(value)?.text;
+}
+
+/* ------------------------------------------------------------------ */
+/* Run gate                                                            */
+/* ------------------------------------------------------------------ */
+
+type AnyFn = (...a: unknown[]) => unknown;
+
+const LISTENER_ADD = new Set<PropertyKey>(["on", "once", "addListener", "prependListener", "prependOnceListener"]);
+const LISTENER_REMOVE = new Set<PropertyKey>(["off", "removeListener"]);
+const DEVICES = new Set<PropertyKey>(["mouse", "keyboard", "touchscreen"]);
+
+export class RunGate {
+  finished = false;
+  reason = "ended";
+  /** In-flight wrapped calls, insertion ordered (the last one is the most recent). */
+  private readonly inflight = new Map<object, string>();
+  private readonly listeners: Array<{ target: { off: AnyFn }; event: unknown; fn: unknown; orig: unknown }> = [];
+  private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  private readonly intervals = new Set<ReturnType<typeof setInterval>>();
+  private readonly immediates = new Set<ReturnType<typeof setImmediate>>();
+
+  /**
+   * What a call through a closed gate gets: a promise that rejects with
+   * RunAbortedError after a short macrotask delay. Rejecting asynchronously
+   * (rather than throwing) means a zombie that catches the error and retries
+   * in a loop yields to the event loop instead of starving the daemon.
+   */
+  abortedCall(): Promise<never> {
+    const reason = this.reason;
+    // A script that swallows the error and retries forever is abandoned after a
+    // few rounds: a promise that never settles lets the whole chain be GC'd.
+    if (++this.abortedCalls > 50) return new Promise<never>(() => {});
+    return new Promise((_, reject) => setTimeout(() => reject(new RunAbortedError(reason)), 25));
+  }
+  private abortedCalls = 0;
+
+  /** Description of the most recent in-flight call, e.g. `page.click("ref/e4")`. */
+  lastInflight(): string | undefined {
+    let last: string | undefined;
+    for (const d of this.inflight.values()) last = d;
+    return last;
+  }
+
+  close(reason: string): void {
+    if (this.finished) return;
+    this.finished = true;
+    this.reason = reason;
+    for (const t of this.timers) clearTimeout(t);
+    for (const t of this.intervals) clearInterval(t);
+    for (const t of this.immediates) clearImmediate(t);
+    this.timers.clear();
+    this.intervals.clear();
+    this.immediates.clear();
+    for (const l of this.listeners) {
+      try {
+        l.target.off(l.event, l.fn);
+      } catch {
+        /* target gone */
+      }
+    }
+    this.listeners.length = 0;
+  }
+
+  /** Sandbox timer globals whose handles are cleared when the run ends. */
+  timerGlobals(): Record<string, unknown> {
+    const timers = this.timers;
+    const intervals = this.intervals;
+    const immediates = this.immediates;
+    return {
+      setTimeout: (fn: unknown, ms?: number, ...args: unknown[]) => {
+        const h = setTimeout(() => {
+          timers.delete(h);
+          if (typeof fn === "function") (fn as AnyFn)(...args);
+        }, ms);
+        timers.add(h);
+        return h;
+      },
+      clearTimeout: (h: ReturnType<typeof setTimeout>) => {
+        timers.delete(h);
+        clearTimeout(h);
+      },
+      setInterval: (fn: unknown, ms?: number, ...args: unknown[]) => {
+        const h = setInterval(() => {
+          if (typeof fn === "function") (fn as AnyFn)(...args);
+        }, ms);
+        intervals.add(h);
+        return h;
+      },
+      clearInterval: (h: ReturnType<typeof setInterval>) => {
+        intervals.delete(h);
+        clearInterval(h);
+      },
+      setImmediate: (fn: unknown, ...args: unknown[]) => {
+        const h = setImmediate(() => {
+          immediates.delete(h);
+          if (typeof fn === "function") (fn as AnyFn)(...args);
+        });
+        immediates.add(h);
+        return h;
+      },
+      clearImmediate: (h: ReturnType<typeof setImmediate>) => {
+        immediates.delete(h);
+        clearImmediate(h);
+      },
+    };
+  }
+
+  private readonly guards = new WeakMap<object, object>();
+
+  /** Wrap a Puppeteer object so every method call goes through the gate. Same target -> same proxy. */
+  guard<T extends object>(target: T, label: string): T {
+    const known = this.guards.get(target);
+    if (known) return known as T;
+    const proxy = this.makeGuard(target, label);
+    this.guards.set(target, proxy);
+    return proxy;
+  }
+
+  private makeGuard<T extends object>(target: T, label: string): T {
+    const cache = new Map<PropertyKey, { fn: unknown; wrapper: AnyFn }>();
+    const subs = new Map<PropertyKey, { raw: unknown; proxy: object }>();
+    const gate = this;
+    return new Proxy(target, {
+      get(t, prop) {
+        const v = Reflect.get(t, prop, t);
+        if (typeof v !== "function") {
+          if (DEVICES.has(prop) && v && typeof v === "object") {
+            const s = subs.get(prop);
+            if (s && s.raw === v) return s.proxy;
+            const proxy = gate.guard(v as object, `${label}.${String(prop)}`);
+            subs.set(prop, { raw: v, proxy });
+            return proxy;
+          }
+          return v;
+        }
+        const c = cache.get(prop);
+        if (c && c.fn === v) return c.wrapper;
+        const wrapper = gate.wrap(t, prop, v as AnyFn, label);
+        cache.set(prop, { fn: v, wrapper });
+        return wrapper;
+      },
+      set(t, prop, value) {
+        return Reflect.set(t, prop, value, t);
+      },
+    });
+  }
+
+  private wrap(target: object, prop: PropertyKey, fn: AnyFn, label: string): AnyFn {
+    const gate = this;
+    const name = `${label}.${String(prop)}`;
+    const wrapper = function (this: unknown, ...args: unknown[]): unknown {
+      if (gate.finished) return gate.abortedCall();
+      if (LISTENER_ADD.has(prop)) {
+        const [event, handler] = args;
+        if ((prop === "once" || prop === "prependOnceListener") && typeof handler === "function") {
+          // Puppeteer's once() hides its wrapper, so off(event, handler) could not remove it later; use our own.
+          const t = target as { on: AnyFn; prependListener?: AnyFn; off: AnyFn };
+          const entry = { target: t, event, fn: undefined as unknown, orig: handler };
+          const w = (...a: unknown[]) => {
+            t.off(event, w);
+            const i = gate.listeners.indexOf(entry);
+            if (i >= 0) gate.listeners.splice(i, 1);
+            return (handler as AnyFn)(...a);
+          };
+          entry.fn = w;
+          gate.listeners.push(entry);
+          const method = prop === "once" ? t.on : (t.prependListener ?? t.on);
+          return method.call(t, event, w);
+        }
+        gate.listeners.push({ target: target as { off: AnyFn }, event, fn: handler, orig: handler });
+      } else if (LISTENER_REMOVE.has(prop)) {
+        const [event, handler] = args;
+        const i = gate.listeners.findIndex((l) => l.target === target && l.event === event && (l.fn === handler || l.orig === handler));
+        if (i >= 0) {
+          const entry = gate.listeners.splice(i, 1)[0]!;
+          if (entry.fn !== handler) return fn.apply(target, [event, entry.fn]);
+        }
+      }
+      const token = {};
+      gate.inflight.set(token, describeCall(name, args));
+      let result: unknown;
+      try {
+        result = fn.apply(target, args);
+      } catch (err) {
+        gate.inflight.delete(token);
+        throw err;
+      }
+      if (result && typeof (result as Promise<unknown>).then === "function") {
+        const done = () => gate.inflight.delete(token);
+        (result as Promise<unknown>).then(done, done);
+      } else {
+        gate.inflight.delete(token);
+      }
+      return result;
+    };
+    Object.defineProperty(wrapper, "name", { value: name });
+    return wrapper;
+  }
+}
+
+function describeCall(name: string, args: unknown[]): string {
+  const a = args[0];
+  if (typeof a === "string") return `${name}(${JSON.stringify(a.length > 80 ? a.slice(0, 77) + "..." : a)})`;
+  if (typeof a === "number" && typeof args[1] === "number") return `${name}(${a}, ${args[1]})`;
+  return `${name}()`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -113,7 +358,7 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
   const stderr = (s: string) => emit({ type: "stderr", data: s });
 
   // ---- transform first: syntax errors cost no browser time
-  let transformed;
+  let transformed: TransformResult;
   try {
     transformed = transformScript(req.script);
   } catch (err) {
@@ -123,8 +368,14 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
     return { exitCode: EXIT_ERROR };
   }
 
+  const gate = new RunGate();
   const touched = new Map<Page, { name: string | null }>();
   const pageLines: string[] = [];
+  let droppedPageLines = 0;
+  const pushPageLine = (line: string) => {
+    if (pageLines.length < DEFAULTS.pageConsoleMaxLines) pageLines.push(line.slice(0, 500));
+    else droppedPageLines++;
+  };
   const listeners: Array<() => void> = [];
   let entry: BrowserEntry | null = null;
 
@@ -140,33 +391,42 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
     deadlineReject = rej;
   });
   deadlinePromise.catch(() => {});
-  const cleanup = () => {
+  const cleanup = (reason: string) => {
     clearTimeout(timer);
+    gate.close(reason);
     ctx.signal.removeEventListener("abort", onAbort);
     for (const off of listeners) off();
+    if (droppedPageLines > 0) pageLines.push(`[page] ... ${droppedPageLines} more line${droppedPageLines === 1 ? "" : "s"}`);
     if (pageLines.length > 0) stderr(pageLines.join("\n") + "\n");
     if (entry) {
       entry.activeRuns = Math.max(0, entry.activeRuns - 1);
       ctx.manager.touch(entry);
     }
   };
-  const finish = (exitCode: number) => {
+  const finish = (exitCode: number, reason: string) => {
     if (finished) return;
-    cleanup();
+    cleanup(reason);
     finished = true;
     resolveOutcome({ exitCode });
   };
   const timer = setTimeout(() => {
-    const err = new DeadlineError(Math.round(req.timeoutMs / 1000));
+    const err = new DeadlineError(Math.round(req.timeoutMs / 1000), gate.lastInflight());
+    // Stop the script at its next page call right away; the error frame follows.
+    gate.close("deadline passed");
     deadlineReject(err);
     if (finished) return;
-    void buildErrorFrame(err, req.scriptName, touched, 0, transformed.columnShifts).then((frame) => {
+    void buildErrorFrame(err, req.scriptName, touched, 0, transformed).then((frame) => {
       if (finished) return;
       emit(frame);
-      finish(EXIT_TIMEOUT);
+      finish(EXIT_TIMEOUT, "deadline passed");
     });
   }, remaining());
-  const onAbort = () => deadlineReject(new AbortedError());
+  const onAbort = () => {
+    // Client gone: nobody will read frames; end the run now so the script stops at its next page call.
+    gate.close("aborted (client disconnected)");
+    deadlineReject(new AbortedError());
+    finish(EXIT_ERROR, "aborted (client disconnected)");
+  };
   ctx.signal.addEventListener("abort", onAbort, { once: true });
 
   const track = (page: Page, name: string | null) => {
@@ -177,21 +437,28 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
     const onConsole = (msg: ConsoleMessage) => {
       const t = msg.type() as string;
       if (t !== "error" && t !== "warn" && t !== "warning") return;
-      if (pageLines.length < DEFAULTS.pageConsoleMaxLines) {
-        pageLines.push(`${label()} ${t === "error" ? "error" : "warn"}: ${msg.text()}`.slice(0, 500));
+      let url = "";
+      try {
+        url = msg.location()?.url ?? "";
+      } catch {
+        /* ignore */
       }
+      if (url.endsWith("/favicon.ico")) return; // every dev server 404s this probe
+      let text = msg.text();
+      if (url && /^Failed to load resource/.test(text)) text += ` (${url})`;
+      pushPageLine(`${label()} ${t === "error" ? "error" : "warn"}: ${text}`);
     };
     const onPageError = (e: unknown) => {
       const err = e as Error | undefined;
-      if (pageLines.length < DEFAULTS.pageConsoleMaxLines) {
-        pageLines.push(`${label()} uncaught: ${err?.message ?? String(e)}`.slice(0, 500));
-      }
+      pushPageLine(`${label()} uncaught: ${err?.message ?? String(e)}`);
     };
     page.on("console", onConsole);
     page.on("pageerror", onPageError);
+    const offHook = addPageLineHook(page, (text) => pushPageLine(`${label()} ${text}`));
     listeners.push(() => {
       page.off("console", onConsole);
       page.off("pageerror", onPageError);
+      offHook();
     });
   };
 
@@ -208,14 +475,16 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
     // ---- globals
     const browserApi = Object.freeze({
       getPage: async (name: string) => {
+        if (gate.finished) return gate.abortedCall();
         const p = await pages.getPage(name);
         track(p, pages.nameOf(p) ?? (looksLikeId(name) ? null : name));
-        return p;
+        return gate.guard(p, "page");
       },
       newPage: async () => {
+        if (gate.finished) return gate.abortedCall();
         const p = await pages.newPage();
         track(p, null);
-        return p;
+        return gate.guard(p, "page");
       },
       listPages: () => pages.listPages(),
       closePage: (name: string) => pages.closePage(name),
@@ -233,6 +502,7 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
 
     ensureHome();
     const saveFile = (name: string, data: string | Uint8Array): string => {
+      if (gate.finished) throw new RunAbortedError(gate.reason);
       const file = jailPath(name);
       fs.writeFileSync(file, typeof data === "string" ? data : Buffer.from(data), { mode: 0o600 });
       return file;
@@ -244,12 +514,7 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
       console: consoleApi,
       saveFile,
       readFile,
-      setTimeout,
-      clearTimeout,
-      setInterval,
-      clearInterval,
-      setImmediate,
-      clearImmediate,
+      ...gate.timerGlobals(),
       queueMicrotask,
       structuredClone,
       URL,
@@ -282,17 +547,24 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
       lineOffset: transformed.lineOffset,
     }) as () => Promise<unknown>;
     const value = await Promise.race([withRun({ id: req.id, emit }, () => fn()), deadlinePromise]);
-    const formatted = formatResult(value);
-    if (formatted !== undefined) emit({ type: "result", value: formatted });
+    const rendered = renderResult(value);
+    if (rendered !== undefined) {
+      const frame: ResultFrame & { data?: unknown } = { type: "result", value: rendered.text };
+      if ("data" in rendered) frame.data = rendered.data;
+      emit(frame);
+    }
     return EXIT_OK;
   })().then(
-    (code) => finish(code),
+    (code) => finish(code, "ended"),
     async (err) => {
+      if (finished) return;
       if (err instanceof DeadlineError) return; // the timer owns the timeout frame
-      const frame = await buildErrorFrame(err, req.scriptName, touched, remaining(), transformed.columnShifts);
+      if (err instanceof AbortedError) return; // onAbort already finished the run
+      if (err instanceof RunAbortedError) return; // a zombie hit the closed gate; the deadline/abort path owns the outcome
+      const frame = await buildErrorFrame(err, req.scriptName, touched, remaining(), transformed);
       if (finished) return;
       emit(frame);
-      finish(EXIT_ERROR);
+      finish(EXIT_ERROR, "ended");
     },
   );
   return outcome;
@@ -314,7 +586,7 @@ async function buildErrorFrame(
   scriptName: string,
   touched: Map<Page, { name: string | null }>,
   remainingMs: number,
-  columnShifts: Record<number, number> = {},
+  transformed?: Pick<TransformResult, "columnShifts" | "returnInsert">,
 ): Promise<ErrorFrame> {
   const pages = await describePages(touched, Math.min(1500, Math.max(200, remainingMs)));
   if (err instanceof DeadlineError) {
@@ -326,7 +598,7 @@ async function buildErrorFrame(
   if (err instanceof ChromeNotFoundError || err instanceof CdpConnectError) {
     return { type: "error", kind: "daemon", name: err.name, message: err.message };
   }
-  const f = formatScriptError(err, scriptName, { columnShifts });
+  const f = formatScriptError(err, scriptName, { columnShifts: transformed?.columnShifts, returnInsert: transformed?.returnInsert });
   return { type: "error", kind: "script", name: f.name, message: f.message, stack: f.stack, pages };
 }
 

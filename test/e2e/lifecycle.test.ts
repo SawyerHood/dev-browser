@@ -211,7 +211,7 @@ describe("daemon and browser lifecycle", () => {
     const b = await cli.run(["browsers"]);
     expect(b.stdout.trim().split("\n").length).toBe(2);
     expect(b.stdout).toContain("work:headless  headless");
-    expect(fs.existsSync(path.join(cli.home, "browsers", "work", "profile"))).toBe(true);
+    expect(fs.existsSync(path.join(cli.home, "browsers", "work", "profile-headless"))).toBe(true);
     const s = await cli.run(["stop", "work"]);
     expect(s).toEqual({ code: 0, stdout: "stopped 1 browser(s)\n", stderr: "" });
     const b2 = await cli.run(["browsers"]);

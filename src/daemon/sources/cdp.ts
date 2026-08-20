@@ -22,6 +22,20 @@ export class CdpConnectError extends Error {
   }
 }
 
+/**
+ * Endpoint URL safe for logs, `doobie status` and registry keys: remote CDP
+ * providers put API tokens in the query string or userinfo; keep only
+ * scheme://host:port/path.
+ */
+export function redactEndpoint(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return url.replace(/^([a-z]+:\/\/)[^@/]*@/i, "$1").replace(/[?#].*$/, "");
+  }
+}
+
 export interface ResolvedCdp {
   wsEndpoint: string;
   /** What the user asked for; "auto" or the original URL. */
@@ -101,7 +115,8 @@ export async function connectCdp(spec: CdpSource, log: FileLogger): Promise<{ br
     browserWSEndpoint: resolved.wsEndpoint,
     defaultViewport: null,
     protocolTimeout: PROTOCOL_TIMEOUT_MS,
+    acceptInsecureCerts: spec.ignoreHTTPSErrors === true,
   });
-  log.info(`connected to ${resolved.wsEndpoint} in ${Date.now() - t0}ms`);
+  log.info(`connected to ${redactEndpoint(resolved.wsEndpoint)} in ${Date.now() - t0}ms`);
   return { browser, resolved };
 }

@@ -8,7 +8,11 @@
  *     daemon.log         rolling daemon log
  *     config.json        user defaults (headless, idleTimeout, chrome)
  *     tmp/               jail for saveFile/readFile/shot/spill files
- *     browsers/<name>/profile   persistent Chrome user-data-dir per profile
+ *     browsers/<name>/profile            persistent Chrome user-data-dir (headed)
+ *     browsers/<name>/profile-headless   separate user-data-dir for the headless instance
+ *     browsers/<name>/profile[-headless]-insecure   same, for --ignore-https-errors instances
+ *     chrome-profiles/<name>             user-data-dirs for `doobie chrome --profile NAME`
+ *     tmp/downloads/     download directory for launched browsers
  *     pages/<key>.json   name -> targetId map per browser key
  *     chrome/            Chrome for Testing installed by `doobie install`
  *     chrome-ports.json  ports remembered by `doobie chrome`
@@ -96,7 +100,16 @@ export const paths = {
   config: () => joinPath(doobieHome(), "config.json"),
   tmp: () => joinPath(doobieHome(), "tmp"),
   browsers: () => joinPath(doobieHome(), "browsers"),
-  profile: (name: string) => joinPath(doobieHome(), "browsers", sanitizeName(name), "profile"),
+  /**
+   * Chrome user-data-dir for a launched profile. Headed and headless instances
+   * of one name never share a dir: Chrome's ProcessSingleton would refuse the
+   * second launch (and the old orphan recovery killed the first one).
+   */
+  profile: (name: string, headless = false, insecure = false) =>
+    joinPath(doobieHome(), "browsers", sanitizeName(name), "profile" + (headless ? "-headless" : "") + (insecure ? "-insecure" : "")),
+  /** user-data-dir for `doobie chrome --profile NAME`; its own root so it never collides with -b NAME. */
+  chromeProfile: (name: string) => joinPath(doobieHome(), "chrome-profiles", sanitizeName(name)),
+  downloads: () => joinPath(doobieHome(), "tmp", "downloads"),
   pagesDir: () => joinPath(doobieHome(), "pages"),
   pagesFile: (browserKey: string) => joinPath(doobieHome(), "pages", sanitizeKey(browserKey) + ".json"),
   chromeDir: () => joinPath(doobieHome(), "chrome"),
@@ -107,7 +120,17 @@ export const paths = {
 export function ensureHome(): void {
   const fs = lazyFs();
   for (const dir of [doobieHome(), paths.tmp(), paths.browsers(), paths.pagesDir()]) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EACCES" || code === "EROFS" || code === "EPERM" || code === "ENOTDIR") {
+        throw new Error(
+          `cannot write to DOOBIE_HOME ${doobieHome()} (${code}). Fix its permissions or point DOOBIE_HOME at a writable directory.`,
+        );
+      }
+      throw err;
+    }
   }
 }
 

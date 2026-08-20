@@ -23,6 +23,8 @@ export interface LaunchSource {
   /** Profile name. Sanitized to [A-Za-z0-9._-]. */
   name: string;
   headless: boolean;
+  /** Accept self-signed / invalid TLS certificates (`--ignore-https-errors`). Gets its own instance (key suffix ":insecure"). */
+  ignoreHTTPSErrors?: boolean;
 }
 
 /** Attach to a running Chrome over CDP. `auto` discovers a local endpoint. */
@@ -30,6 +32,8 @@ export interface CdpSource {
   kind: "cdp";
   /** "auto" | http(s)://host:port | ws(s)://... */
   url: string;
+  /** Accept self-signed / invalid TLS certificates (`--ignore-https-errors`). */
+  ignoreHTTPSErrors?: boolean;
 }
 
 /** Attach over a local socket that speaks raw CDP JSON lines (bb hook). */
@@ -133,6 +137,8 @@ export interface ImageFrame {
 export interface ResultFrame {
   type: "result";
   value: string;
+  /** Structured value when the result is JSON-serializable (strings, numbers, objects, arrays). */
+  data?: unknown;
 }
 
 export interface PageInfo {

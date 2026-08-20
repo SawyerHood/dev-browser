@@ -29,9 +29,14 @@ async function buildDaemon(): Promise<void> {
     naming: "daemon.js",
     target: "bun",
     format: "esm",
-    minify: true,
+    // Keep identifiers: puppeteer-core's errors set `this.name =
+    // this.constructor.name`, so identifier minification turns TimeoutError
+    // into "B8" in every error line and in e.name inside scripts.
+    minify: { whitespace: true, syntax: true, identifiers: false },
     sourcemap: "none",
-    external: ["proxy-agent", "yauzl"],
+    // yauzl is bundled so `doobie install` works without an `unzip` binary;
+    // proxy-agent (optional HTTPS_PROXY support) stays out of the bundle.
+    external: ["proxy-agent"],
   });
   if (!result.success) {
     for (const l of result.logs) console.error(l);
@@ -43,7 +48,15 @@ async function buildDaemon(): Promise<void> {
 
 async function compileCli(): Promise<void> {
   const t0 = Date.now();
-  const args = ["build", "--compile", "--minify", path.join(root, "src/cli/compiled-entry.ts"), "--outfile", outfile];
+  const args = [
+    "build",
+    "--compile",
+    "--minify-whitespace",
+    "--minify-syntax",
+    path.join(root, "src/cli/compiled-entry.ts"),
+    "--outfile",
+    outfile,
+  ];
   if (target) args.push("--target", target);
   await $`bun ${args}`.cwd(root);
   const size = fs.statSync(outfile).size;

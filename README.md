@@ -5,7 +5,7 @@ Browser automation CLI for coding agents: Puppeteer scripts, named pages, snapsh
 An agent (Claude Code, Codex, ...) pipes a short JavaScript snippet into `doobie`; the snippet runs against a real Chrome
 that stays open between calls. Pages have names (`browser.getPage("checkout")`) so each step resumes where the last one
 stopped. `page.snapshot()` returns an ARIA tree with refs (`e12`), and `page.click("ref/e12")` acts on them. Typical
-warm call: about 25 ms.
+warm call: about 15 ms.
 
 ```bash
 doobie <<'EOF'
@@ -13,22 +13,24 @@ const page = await browser.getPage("main");
 await page.goto("https://example.com");
 await page.snapshot({ interactive: true })
 EOF
-# - heading "Example Domain" [level=1]
-# - link "More information..." [ref=e1]:
-#   - /url: https://www.iana.org/domains/example
+# - heading "Example Domain" [level=1] [ref=e3]
+# - link "Learn more" [ref=e6] [cursor=pointer]:
+#   - /url: https://iana.org/domains/example
 
-doobie -e 'const p = await browser.getPage("main"); await p.click("ref/e1"); await p.waitForLoad(); p.url()'
+doobie -e 'const p = await browser.getPage("main"); await p.click("ref/e6"); await p.waitForLoad(); p.url()'
 ```
 
 ## Install
 
 ```bash
 npm install -g doobie          # or download a binary from GitHub Releases
-doobie install                 # only if no Chrome/Chromium/Edge/Brave is installed (downloads Chrome for Testing)
+doobie install                 # only if the first run says "No Chrome found" (downloads Chrome for Testing, ~150 MB)
 doobie install-skill           # optional: SKILL.md for Claude Code / Codex / ~/.agents
 ```
 
-macOS and Linux. Windows is not yet supported. Requires nothing else at runtime: the binary embeds Bun and Puppeteer.
+macOS and Linux. Windows is not yet supported. Requires nothing else at runtime: the binary embeds Bun, Puppeteer and
+the zip extractor used by `doobie install` (no `unzip` needed). Snap-packaged Chromium on Ubuntu cannot read `~/.doobie`;
+use `doobie install` or `DOOBIE_CHROME` there.
 
 ## Quick start
 
@@ -54,23 +56,28 @@ Scripts get `browser` (`getPage`, `newPage`, `listPages`, `closePage`), `console
 - **Puppeteer + `node:vm`.** Each script is wrapped in an async function and run in a fresh `vm` context inside the
   daemon with real Puppeteer objects. This gives clean globals and fast startup; it is not a security boundary.
 - **Named pages.** `getPage(name)` maps a name to a Chrome tab (`~/.doobie/pages/`), so state survives across scripts
-  and even daemon restarts. Launched browsers use persistent profiles under `~/.doobie/browsers/<name>`.
-- **Snapshot refs.** An in-page script renders an ARIA YAML tree and assigns stable refs to visible interactive
-  elements; `ref/e12` is a registered Puppeteer query handler, so it works in every selector API.
-- **One deadline.** `--timeout` (default 30 s) bounds connect + script + teardown; per-action defaults are 5 s
-  (actions) and 15 s (navigation). Exit codes: 0 ok, 1 error, 2 usage, 124 deadline.
+  and even daemon restarts. Names are scoped to one browser key (`default`, `default:headless`, `work`, ...). Launched
+  browsers use persistent profiles under `~/.doobie/browsers/<name>/profile` (headless: `profile-headless`); headed
+  and headless are separate Chromes with separate profiles.
+- **Snapshot refs.** An in-page script renders an ARIA YAML tree and assigns stable refs to every visible element that
+  receives pointer events (`interactive: true` prunes to controls plus headings/landmarks); `ref/e12` is a registered
+  Puppeteer query handler, so it works in every selector API.
+- **One deadline.** `--timeout` (default 30 s) bounds connect + script + teardown; Puppeteer waits default to 5 s
+  (navigation 15 s); a script that outlives the deadline is stopped at its next page call. Exit codes: 0 ok, 1 error,
+  2 usage, 124 deadline.
 - **Attach, not just launch.** `--connect` attaches to any Chrome over CDP (auto-discovery, port, http, ws, or a raw
   CDP unix socket); `doobie chrome` starts your installed Chrome with remote debugging on a dedicated profile.
 
 ## Performance
 
-Measured on Linux, headless, warm daemon (see `bun run bench`):
+Measured on Linux, headless, warm daemon, medians of 21 runs (`bun run build && bun run bench/run.ts`):
 
 | scenario                              | time     |
 | ------------------------------------- | -------- |
-| `doobie -e '1+1'` (warm)              | ~24 ms   |
-| `getPage("x")` + `page.title()` (warm)| ~25 ms   |
-| cold start (spawn daemon, no Chrome)  | ~360 ms  |
+| `doobie -e '1+1'` (warm)              | ~14 ms   |
+| `getPage("x")` + `page.title()` (warm)| ~14 ms   |
+| `page.snapshot()` (SERP-like page, in-script) | ~18 ms |
+| cold start (spawn daemon + launch headless Chrome) | ~570 ms |
 
 ## Development
 

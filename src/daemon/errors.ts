@@ -16,16 +16,35 @@ export interface FormatOptions {
   line1ColumnShift?: number;
   /** Per-line column shifts introduced by the transform; overrides line1ColumnShift when given. */
   columnShifts?: Record<number, number>;
+  /**
+   * Where the transform inserted `return (`. On that line only frames at or
+   * after the insertion point are shifted by `length`; the rest of the
+   * line's shift (the line-1 wrapper) always applies.
+   */
+  returnInsert?: { line: number; column: number; length: number } | null;
 }
 
 export function formatScriptError(err: unknown, scriptName: string, opts: FormatOptions = {}): FormattedError {
   if (err === null || err === undefined) return { name: "Error", message: String(err) };
   if (typeof err !== "object") return { name: "Error", message: String(err) };
-  const e = err as { name?: unknown; message?: unknown; stack?: unknown };
+  const e = err as { name?: unknown; message?: unknown; stack?: unknown; cause?: unknown };
   const name = typeof e.name === "string" && e.name.length > 0 ? e.name : "Error";
-  const message = typeof e.message === "string" ? e.message : String(err);
-  const stack = typeof e.stack === "string" ? cleanStack(e.stack, scriptName, message, opts) : undefined;
+  let message = typeof e.message === "string" ? e.message : String(err);
+  // Puppeteer 25 puts the detail ("Waiting failed: 5000ms exceeded") in err.cause.
+  const causeMessage = causeText(e.cause);
+  if (causeMessage && !message.includes(causeMessage)) message += ` (cause: ${causeMessage})`;
+  const stack = typeof e.stack === "string" ? cleanStack(e.stack, scriptName, typeof e.message === "string" ? e.message : message, opts) : undefined;
   return { name, message, stack };
+}
+
+function causeText(cause: unknown): string | undefined {
+  if (cause === null || cause === undefined) return undefined;
+  if (typeof cause === "string") return cause.length > 0 ? cause : undefined;
+  if (typeof cause === "object") {
+    const m = (cause as { message?: unknown }).message;
+    if (typeof m === "string" && m.length > 0) return m;
+  }
+  return undefined;
 }
 
 export function cleanStack(stack: string, scriptName: string, message: string, opts: FormatOptions = {}): string | undefined {
@@ -42,11 +61,23 @@ export function cleanStack(stack: string, scriptName: string, message: string, o
     if (!m) continue;
     const fn = m[1] && !/^(?:async\s+)?(?:<anonymous>|eval|Object\.<anonymous>)$/.test(m[1]) ? m[1] : "";
     const line = m[2]!;
-    let col = Number(m[3]);
-    const shift = opts.columnShifts ? (opts.columnShifts[Number(line)] ?? 0) : line === "1" ? (opts.line1ColumnShift ?? 0) : 0;
-    if (shift) col = Math.max(1, col - shift);
+    const col = adjustColumn(Number(line), Number(m[3]), opts);
     frames.push(fn ? `    at ${fn} (${scriptName}:${line}:${col})` : `    at ${scriptName}:${line}:${col}`);
     if (frames.length >= MAX_FRAMES) break;
   }
   return frames.length > 0 ? frames.join("\n") : undefined;
+}
+
+/** Map a column reported against the transformed source back to the user's source. */
+export function adjustColumn(line: number, col: number, opts: FormatOptions): number {
+  let shift = opts.columnShifts ? (opts.columnShifts[line] ?? 0) : line === 1 ? (opts.line1ColumnShift ?? 0) : 0;
+  const ri = opts.returnInsert;
+  if (ri && ri.line === line && shift >= ri.length) {
+    const unconditional = shift - ri.length; // the line-1 wrapper part, if any
+    const pos0 = col - 1 - unconditional; // 0-based column in "user source with `return (` inserted"
+    if (pos0 >= ri.column + ri.length) shift = unconditional + ri.length;
+    else if (pos0 > ri.column) shift = unconditional + (pos0 - ri.column); // inside the inserted text: clamp to the insertion point
+    else shift = unconditional;
+  }
+  return shift ? Math.max(1, col - shift) : col;
 }

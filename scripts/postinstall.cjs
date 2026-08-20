@@ -32,6 +32,7 @@ if (!plat || !arch) {
   process.exit(0);
 }
 if (plat === "windows") {
+  // package.json has no "os" field on purpose: this soft message is the only Windows gate.
   console.warn("doobie: Windows is not supported yet (planned after 1.0).");
   process.exit(0);
 }

@@ -9,7 +9,7 @@ CLI for controlling a real Chrome with short Puppeteer scripts. One warm daemon;
 
 ```bash
 npm install -g doobie
-doobie install   # only if no Chrome/Chromium/Edge is installed
+doobie install   # only if the first run says "No Chrome found"
 ```
 
 Run `doobie --help` (full guide; `doobie help <topic>` for one section) before non-trivial work. Quick start:
@@ -20,5 +20,9 @@ const page = await browser.getPage("main");        // named page persists across
 await page.goto("https://example.com");            // default waitUntil: domcontentloaded
 await page.snapshot({ interactive: true })         // ARIA tree with refs; last expression is printed
 EOF
-doobie -e 'const p = await browser.getPage("main"); await p.click("ref/e3"); await p.waitForLoad(); p.url()'
+doobie -e 'const p = await browser.getPage("main"); await p.click("ref/e6"); await p.waitForLoad(); p.url()'
 ```
+
+Gotchas: end lines with semicolons (a line starting with `(` continues the previous one); return an object as
+`({ a, b })`; `page.click` never waits (use `waitForSelector` first); page names are per browser (`--headless` and
+headed are separate Chromes and profiles); refs reset on navigation — re-snapshot.

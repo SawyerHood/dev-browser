@@ -30,6 +30,13 @@ export class PageRegistry {
   private loaded = false;
   /** Target ids that existed when the browser was launched (Chrome's initial about:blank tab). */
   readonly initialTargetIds = new Set<string>();
+  /**
+   * Page creation is serialized per registry (design §2): the lookup, the
+   * adopt-or-create and the names.set must be atomic, or N parallel
+   * getPage(name) calls create N tabs (N-1 leaked anonymous) and N parallel
+   * first-time calls with different names all adopt the one initial tab.
+   */
+  private lock: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly browser: Browser,
@@ -76,6 +83,12 @@ export class PageRegistry {
     return null;
   }
 
+  private withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.lock.then(fn, fn);
+    this.lock = run.catch(() => {});
+    return run;
+  }
+
   private async pageFromTarget(target: Target): Promise<Page> {
     const page = await target.page();
     if (!page) throw new Error(`Target ${(target as Target & { _targetId?: string })._targetId} is not a page`);
@@ -97,6 +110,10 @@ export class PageRegistry {
       if (!target) throw new Error(`No page with target id ${nameOrId}. Use browser.listPages() to see open pages.`);
       return this.pageFromTarget(target);
     }
+    return this.withLock(() => this.getNamedPage(nameOrId));
+  }
+
+  private async getNamedPage(nameOrId: string): Promise<Page> {
     const existingId = this.names.get(nameOrId);
     if (existingId) {
       const target = this.findTarget(existingId);
@@ -110,8 +127,11 @@ export class PageRegistry {
       return this.initialTargetIds.has(id) && !named.has(id) && t.url() === "about:blank";
     });
     if (initial) {
+      // Reserve the target before the first await so nothing else can adopt it.
+      const initialId = (initial as Target & { _targetId?: string })._targetId ?? "";
+      this.initialTargetIds.delete(initialId);
+      this.names.set(nameOrId, initialId);
       const adopted = await this.pageFromTarget(initial);
-      this.initialTargetIds.delete(targetIdOf(adopted));
       this.names.set(nameOrId, targetIdOf(adopted));
       this.save();
       return adopted;
@@ -124,9 +144,11 @@ export class PageRegistry {
   }
 
   async newPage(): Promise<Page> {
-    const page = await this.browser.newPage();
-    extendPage(page);
-    return page;
+    return this.withLock(async () => {
+      const page = await this.browser.newPage();
+      extendPage(page);
+      return page;
+    });
   }
 
   /** Name an existing page (used by tests and future `doobie pages name` command). */
@@ -138,15 +160,17 @@ export class PageRegistry {
 
   async closePage(name: string): Promise<void> {
     this.load();
-    const id = this.names.get(name);
-    if (!id) throw new Error(`Page "${name}" not found`);
-    const target = this.findTarget(id);
-    this.names.delete(name);
-    this.save();
-    if (target) {
-      const page = await target.page();
-      if (page && !page.isClosed()) await page.close();
-    }
+    return this.withLock(async () => {
+      const id = this.names.get(name);
+      if (!id) throw new Error(`Page "${name}" not found`);
+      const target = this.findTarget(id);
+      this.names.delete(name);
+      this.save();
+      if (target) {
+        const page = await target.page();
+        if (page && !page.isClosed()) await page.close();
+      }
+    });
   }
 
   /** Called when the manager notices a target went away. */

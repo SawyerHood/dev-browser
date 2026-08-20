@@ -125,3 +125,31 @@ describe("transformScript column shifts", () => {
     expect(transformScript("const a = 1\nconst b = 2").columnShifts).toEqual({ 1: "(async () => {".length });
   });
 });
+
+describe("transformScript: trailing object literal", () => {
+  test("`{ a: 1 }` as the last statement is returned like an object literal (not a block)", async () => {
+    expect(await run("{ a: 1 }")).toEqual({ a: 1 });
+    expect(await run("const x = 2\n{ a: x }")).toEqual({ a: 2 });
+    expect(await run("{}")).toEqual({});
+  });
+
+  test("an object literal that does not even parse as a block (await/commas) is retried with parens", async () => {
+    expect(await run("const x = 2\n{ a: x, b: await Promise.resolve(3) }")).toEqual({ a: 2, b: 3 });
+    expect(await run("const x = 2\n{ a: x, b: 3 } // trailing comment\n")).toEqual({ a: 2, b: 3 });
+    expect(await run("const x = 2\n{ a: x, b: 3 }; /* block */")).toEqual({ a: 2, b: 3 });
+  });
+
+  test("real blocks and labels are left alone; other syntax errors still throw", async () => {
+    expect(await run("if (true) { 1 }")).toBeUndefined();
+    expect(await run("foo: { a: 1 }\n")).toBeUndefined();
+    expect(() => transformScript("const b = ;\n{ a: 1 }")).toThrow(ScriptSyntaxError);
+    expect(() => transformScript("{ a: 1, b: await, }")).toThrow(ScriptSyntaxError);
+  });
+
+  test("returnInsert records where `return (` went", () => {
+    expect(transformScript("1+1").returnInsert).toEqual({ line: 1, column: 0, length: 8 });
+    expect(transformScript("const f = () => 1; f()").returnInsert).toEqual({ line: 1, column: 19, length: 8 });
+    expect(transformScript("const a = 1\n  a").returnInsert).toEqual({ line: 2, column: 2, length: 8 });
+    expect(transformScript("const a = 1").returnInsert).toBeNull();
+  });
+});

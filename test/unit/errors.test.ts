@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { cleanStack, formatScriptError } from "../../src/daemon/errors.ts";
+import { cleanStack, formatScriptError, adjustColumn } from "../../src/daemon/errors.ts";
 
 describe("cleanStack", () => {
   const stack = [
@@ -79,5 +79,44 @@ describe("cleanStack columnShifts", () => {
     expect(cleanStack(s, "<stdin>", "x", { columnShifts: { 1: 14, 3: 8 } })).toBe(
       "    at <stdin>:1:6\n    at <stdin>:3:2\n    at <stdin>:2:10",
     );
+  });
+});
+
+describe("formatScriptError cause", () => {
+  test("appends err.cause's message when it adds information", () => {
+    const e = new Error("Waiting for selector `#x` failed", { cause: new Error("Waiting failed: 5000ms exceeded") });
+    expect(formatScriptError(e, "<stdin>").message).toBe("Waiting for selector `#x` failed (cause: Waiting failed: 5000ms exceeded)");
+  });
+  test("string causes work; a cause already contained in the message is not repeated", () => {
+    expect(formatScriptError(new Error("boom", { cause: "disk full" }), "<stdin>").message).toBe("boom (cause: disk full)");
+    expect(formatScriptError(new Error("boom: disk full", { cause: new Error("disk full") }), "<stdin>").message).toBe("boom: disk full");
+    expect(formatScriptError(new Error("plain"), "<stdin>").message).toBe("plain");
+  });
+  test("stack header is still recognised after the cause is appended", () => {
+    const e = new Error("m", { cause: new Error("c") });
+    e.stack = "Error: m\n    at <anonymous> (<stdin>:2:3)";
+    expect(formatScriptError(e, "<stdin>").stack).toBe("    at <stdin>:2:3");
+  });
+});
+
+describe("cleanStack returnInsert", () => {
+  // source: `const f = () => { throw new Error('x') }; f()` -> transform inserts `return (` at column 42 (0-based)
+  const opts = { columnShifts: { 1: 14 + 8 }, returnInsert: { line: 1, column: 42, length: 8 } };
+  test("frames before the insertion point are only shifted by the wrapper", () => {
+    // raw column 14 (wrapper) + 18 + 1 -> user column 19
+    expect(adjustColumn(1, 14 + 19, opts)).toBe(19);
+  });
+  test("frames after the insertion point are shifted by wrapper + return(", () => {
+    // `f()` starts at user column 43 (1-based): raw = 14 + 8 + 43
+    expect(adjustColumn(1, 14 + 8 + 43, opts)).toBe(43);
+  });
+  test("frames inside the inserted text clamp to the insertion point", () => {
+    expect(adjustColumn(1, 14 + 42 + 4, opts)).toBe(43);
+  });
+  test("other lines unaffected; without returnInsert the whole-line shift applies", () => {
+    expect(adjustColumn(2, 10, opts)).toBe(10);
+    expect(adjustColumn(1, 14 + 19, { columnShifts: { 1: 22 } })).toBe(11);
+    const s = "Error: x\n    at <anonymous> (<stdin>:1:33)";
+    expect(cleanStack(s, "<stdin>", "x", opts)).toBe("    at <stdin>:1:19");
   });
 });

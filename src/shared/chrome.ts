@@ -84,13 +84,22 @@ function systemCandidates(): string[] {
   return [];
 }
 
+/** Binary names @puppeteer/browsers produces for Chrome for Testing. */
+const CFT_BINARY_NAMES = new Set(["chrome", "chrome.exe", "Google Chrome for Testing"]);
+/**
+ * Deepest layout is macOS:
+ *   chrome/mac_arm-<build>/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
+ * = 6 directory levels below chromeDir (linux is 3). Keep a margin.
+ */
+const CFT_WALK_DEPTH = 8;
+
 /** Chrome for Testing installed by `doobie install` via @puppeteer/browsers. */
-function installedCandidates(): string[] {
+export function installedCandidates(): string[] {
   const root = paths.chromeDir();
   if (!fs.existsSync(root)) return [];
   const out: string[] = [];
   const walk = (dir: string, depth: number): void => {
-    if (depth > 5) return;
+    if (depth > CFT_WALK_DEPTH) return;
     let entries: fs.Dirent[] = [];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -100,12 +109,7 @@ function installedCandidates(): string[] {
     for (const e of entries) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p, depth + 1);
-      else if (
-        (e.name === "chrome" || e.name === "chrome.exe" || e.name === "Google Chrome for Testing") &&
-        exists(p)
-      ) {
-        out.push(p);
-      }
+      else if (CFT_BINARY_NAMES.has(e.name) && exists(p)) out.push(p);
     }
   };
   walk(root, 0);
