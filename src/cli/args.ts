@@ -35,7 +35,8 @@ export type Command =
   | { kind: "install-skill"; args: string[] }
   | { kind: "chrome"; args: string[] }
   | { kind: "help"; topic?: string }
-  | { kind: "daemon" };
+  | { kind: "daemon" }
+  | { kind: "mcp" };
 
 export interface ParsedArgs {
   flags: GlobalFlags;
@@ -50,7 +51,7 @@ export class UsageError extends Error {
 }
 
 const PASSTHROUGH = new Set(["install", "install-skill", "chrome"]);
-const SUBCOMMANDS = new Set(["run", "pages", "browsers", "status", "stop", "install", "install-skill", "chrome", "help", "daemon"]);
+const SUBCOMMANDS = new Set(["run", "pages", "browsers", "status", "stop", "install", "install-skill", "chrome", "help", "daemon", "mcp"]);
 
 function looksLikeConnectValue(v: string | undefined): boolean {
   if (!v) return false;
@@ -181,6 +182,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
               break;
             case "daemon":
               command = { kind: "daemon" };
+              break;
+            case "mcp":
+              command = { kind: "mcp" };
               break;
             default:
               throw new UsageError(`unknown command "${a}". Run doobie --help.`);

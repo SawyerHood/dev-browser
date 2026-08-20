@@ -48,6 +48,10 @@ Scripts get `browser` (`getPage`, `newPage`, `listPages`, `closePage`), `console
 `page.fill`. Top-level `await` works and the last expression is the return value. Everything else is in
 [docs/help.md](docs/help.md).
 
+## MCP
+
+`doobie mcp --headless` is a stdio MCP server exposing `doobie_run`, `doobie_pages`, `doobie_browsers`, `doobie_stop` and `doobie_help` over the same daemon (`claude mcp add doobie -- doobie mcp --headless`).
+
 ## How it works
 
 - **Thin client, warm daemon.** The `doobie` binary connects to `~/.doobie/daemon.sock`, sends one request, streams the

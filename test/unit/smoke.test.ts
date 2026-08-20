@@ -28,4 +28,4 @@ test("cli env runs -e", async () => {
   } finally {
     await cli.cleanup();
   }
-});
+}, 60_000);

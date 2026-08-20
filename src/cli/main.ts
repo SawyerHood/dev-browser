@@ -56,6 +56,10 @@ export async function main(argv: string[]): Promise<number> {
       out(command.topic ? topicText(command.topic) : helpText());
       return EXIT_OK;
     }
+    case "mcp": {
+      const mod = await loadDaemonModule();
+      return mod.mcpMain(flags);
+    }
     case "install": {
       const mod = await loadDaemonModule();
       return mod.installChrome(command.args);
@@ -91,7 +95,7 @@ export async function main(argv: string[]): Promise<number> {
 
 /* ------------------------------------------------------------------ */
 
-function sourceFromFlags(flags: GlobalFlags, config: DoobieConfig): BrowserSourceSpec {
+export function sourceFromFlags(flags: GlobalFlags, config: DoobieConfig): BrowserSourceSpec {
   const insecure = (flags.ignoreHttpsErrors ?? config.ignoreHttpsErrors) ? { ignoreHTTPSErrors: true } : {};
   if (flags.connect !== undefined) {
     if (flags.connect.startsWith("unix:") || flags.connect.startsWith("pipe:")) return { kind: "socket", path: flags.connect };

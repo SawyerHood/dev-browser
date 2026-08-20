@@ -7,7 +7,7 @@ USAGE
   doobie pages | browsers | status | stop [NAME] | install [--force] | install-skill [--claude|--codex|--agents]
   doobie chrome [--profile NAME] [--port N] [--chrome PATH] [--list] [URL]
   doobie help [topic]               topics: quickstart workflow scripts pages snapshot refs screenshots waiting forms
-                                    errors output connect chrome config json examples tips
+                                    errors output connect chrome config json mcp examples tips
 
 FLAGS
   -b, --browser NAME      launch/reuse a persistent named profile (default: "default"); ~/.doobie/browsers/NAME
@@ -238,6 +238,13 @@ FLAGS
      "pages":[{"id","name","url","title"}]}   {"type":"done","exitCode":N,"durationMs":N}   (done is always last)
   The process exit code equals done.exitCode. Output is never capped in --json mode.
   jq: doobie --json -e '...' | jq -c 'select(.type=="result").data'
+
+## mcp
+  doobie mcp [-b NAME] [--headless] [--connect URL] [-t S]    Model Context Protocol server over stdio (JSON-RPC 2.0).
+  Tools: doobie_run { script, browser?, headless?, connect?, timeout? } (returns console output, the return value,
+  errors, and page.shot() images as image content), doobie_pages, doobie_browsers, doobie_stop { browser? },
+  doobie_help { topic? }. Flags given to `doobie mcp` are the defaults for every call. Same daemon and named pages as
+  the CLI, so a CLI script and an MCP call can share a page. Claude Code: `claude mcp add doobie -- doobie mcp --headless`.
 
 ## examples
   # Inspect a page you have never seen (interactive elements only); first tracked call prints the full tree

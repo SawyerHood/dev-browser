@@ -7,3 +7,4 @@ export { startDaemon } from "./main.ts";
 export { installChrome } from "./install.ts";
 export { installSkill } from "../cli/commands/install-skill.ts";
 export { chromeCommand } from "../cli/commands/chrome.ts";
+export { mcpMain } from "../mcp/server.ts";

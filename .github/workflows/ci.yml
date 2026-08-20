@@ -20,9 +20,7 @@ jobs:
       - name: Install Chrome for Testing
         run: bun x @puppeteer/browsers install chrome@stable --path $HOME/.doobie/chrome
       - run: bun run build
-      - run: bun test
-        env:
-          DOOBIE_TEST_TIMEOUT: "120000"
+      - run: bun run test
       - name: Benchmarks (Linux only; targets x2 for shared runners)
         if: runner.os == 'Linux'
         env:

@@ -12,6 +12,7 @@ export interface DaemonModule {
   installChrome(args: string[]): Promise<number>;
   installSkill(args: string[]): Promise<number>;
   chromeCommand(args: string[]): Promise<number>;
+  mcpMain(flags: import("./args.ts").GlobalFlags): Promise<number>;
 }
 
 declare global {
