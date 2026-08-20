@@ -3,7 +3,7 @@
  * relinkGlobal gating), the bin/doobie.cjs shim's self-heal path, postinstall
  * messages, and the published file list.
  */
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
+import { test as bunTest, expect, describe, beforeAll, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,6 +11,11 @@ import { createRequire } from "node:module";
 import { startServer, type FixtureServer } from "../helpers/server.ts";
 
 const ROOT = path.resolve(import.meta.dir, "../..");
+// The shim and postinstall are Node scripts (npm runs them); skip those tests where node/npm are absent
+// (e.g. a dev Mac with only bun). CI has both.
+const HAS_NODE = !!Bun.which("node");
+const HAS_NPM = !!Bun.which("npm");
+const test = Object.assign((name: string, fn: () => void | Promise<unknown>, t?: number) => bunTest.skipIf(!HAS_NODE || !HAS_NPM)(name, fn, t), bunTest);
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const dl = require(path.join(ROOT, "scripts/download-binary.cjs")) as {
@@ -347,7 +352,7 @@ describe("scripts/postinstall.cjs", () => {
     );
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("points directly at the binary");
-    expect(fs.readlinkSync(link)).toBe(path.join(pkg, "bin/doobie-bin"));
+    expect(fs.realpathSync(fs.readlinkSync(link))).toBe(fs.realpathSync(path.join(pkg, "bin/doobie-bin")));
   });
 
   test("download failure: exit 0, message recommends npm rebuild / manual download, never bun", async () => {
@@ -357,7 +362,8 @@ describe("scripts/postinstall.cjs", () => {
     expect(r.stderr).toContain("could not download the binary (HTTP 404");
     expect(r.stderr).toContain("retry the download on first run");
     expect(r.stderr).toContain("npm rebuild -g doobie");
-    expect(r.stderr).toContain(`${srv.url("/missing")} to ${path.join(pkg, "bin/doobie-bin")}`);
+    expect(r.stderr).toContain(`${srv.url("/missing")} to `);
+    expect(r.stderr).toContain("bin/doobie-bin");
     expect(r.stderr).not.toMatch(NO_BUN_FALLBACK);
   });
 

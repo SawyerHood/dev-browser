@@ -94,6 +94,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<void> {
     } catch (err) {
       log.warn("stopAll failed", err);
     }
+    // Let in-flight requests report (e.g. BrowserStoppedError) before the
+    // process goes away; scripts see their browser gone at their next call.
+    const drainUntil = Date.now() + 3000;
+    while (activeRequests > 0 && Date.now() < drainUntil) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
     setTimeout(() => process.exit(code), 50).unref();
   };
 
