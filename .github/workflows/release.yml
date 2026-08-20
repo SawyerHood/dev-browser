@@ -8,6 +8,8 @@ jobs:
     permissions:
       contents: write
       id-token: write
+    env:
+      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -33,7 +35,8 @@ jobs:
           files: |
             dist/doobie-*
             dist/SHA256SUMS
-      - name: npm publish
+      - name: npm publish (only when NPM_TOKEN is configured)
+        if: ${{ env.HAS_NPM_TOKEN == 'true' }}
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -23,6 +23,8 @@ jobs:
       - run: bun test
         env:
           DOOBIE_TEST_TIMEOUT: "120000"
-      - name: Benchmarks (Linux only)
+      - name: Benchmarks (Linux only; targets x2 for shared runners)
         if: runner.os == 'Linux'
+        env:
+          DOOBIE_BENCH_SCALE: "2"
         run: bun run bench/run.ts --check --bin dist/doobie

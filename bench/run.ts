@@ -15,6 +15,8 @@ import { startServer, type FixtureServer } from "../test/helpers/server.ts";
 import { smallHtml } from "./fixtures/small.ts";
 import { serpHtml } from "./fixtures/serp.ts";
 
+/** DOOBIE_BENCH_SCALE multiplies every target (CI runners are slower than a dev box). */
+const SCALE = Math.max(1, Number(process.env.DOOBIE_BENCH_SCALE ?? "1") || 1);
 const ROOT = path.resolve(import.meta.dir, "..");
 
 interface Opts {
@@ -260,11 +262,12 @@ async function main(): Promise<void> {
       console.log(line(r.name, "skipped", fmt(r.target), "pass", r.note ?? ""));
       continue;
     }
-    const ok = r.ms <= r.target;
+    const ok = r.ms <= r.target * SCALE;
     if (!ok) failed++;
     console.log(line(r.name, fmt(r.ms), fmt(r.target), ok ? "pass" : "FAIL", r.note ?? ""));
   }
   console.log("");
+  if (SCALE !== 1) console.log(`(targets scaled x${SCALE} via DOOBIE_BENCH_SCALE)`);
   if (failed > 0) console.log(`${failed} item(s) over target`);
   if (opts.check && failed > 0) process.exit(1);
 }
