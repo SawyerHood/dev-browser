@@ -1,6 +1,6 @@
 {
   "name": "doobie",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Browser automation CLI for coding agents: Puppeteer scripts, named pages, snapshot refs, one warm daemon.",
   "license": "MIT",
   "type": "module",

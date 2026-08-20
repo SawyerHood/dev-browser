@@ -23,7 +23,7 @@
 
 ## Not done / next steps (in priority order)
 
-1. **npm publish**: GitHub releases `v0.1.0` and `v0.1.1` exist (four binaries + SHA256SUMS; the npm path was verified against them on Linux via `npm install -g <tgz>` and on a bun-only Mac via `bun add -g <tgz>` self-heal). Publishing to npm needs the `NPM_TOKEN` repo secret: add it, then re-run the `release` workflow for `v0.1.1` (or push the next tag). The release tag must equal `v<package.json version>`.
+1. **npm publish**: GitHub releases `v0.1.0`, `v0.1.1` and `v0.1.2` (leak-detection/autofill prefs fix) exist (four binaries + SHA256SUMS; the npm path was verified against them on Linux via `npm install -g <tgz>` and on a bun-only Mac via `bun add -g <tgz>` self-heal). Publishing to npm needs the `NPM_TOKEN` repo secret: add it, then re-run the `release` workflow for `v0.1.2` (or push the next tag). The release tag must equal `v<package.json version>`.
 2. **Real-Chrome path**: `doobie chrome` + `--connect auto` tested on Linux with Playwright's Chromium / CfT only; test with a real Google Chrome and Google sign-in (macOS too).
 3. **bb in-app browser**: implement the bb side of `docs/bb-integration.md`.
 4. **Known, documented limits** (candidates for code fixes): ref on an element moved to another frame acts on wrong coordinates; sync CPU loops are not preempted by the deadline (watchdog restart); a long single action (type with delay) holds the front lock for other tabs.

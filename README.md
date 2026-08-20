@@ -36,7 +36,7 @@ use `doobie install` or `DOOBIE_CHROME` there.
 If your package manager blocks install scripts (`bun add -g doobie`, pnpm before `pnpm approve-builds`, `npm --ignore-scripts`),
 the first `doobie` run downloads the binary itself (`doobie: downloading binary v...`). To fetch it eagerly instead:
 `bun pm -g trust doobie`, `pnpm approve-builds -g doobie`, or `npm rebuild -g doobie`. Behind a mirror set
-`DOOBIE_DOWNLOAD_BASE=https://mirror/path/v0.1.1` (must serve `doobie-<os>-<arch>` and `SHA256SUMS`); with
+`DOOBIE_DOWNLOAD_BASE=https://mirror/path/v0.1.2` (must serve `doobie-<os>-<arch>` and `SHA256SUMS`); with
 `DOOBIE_SKIP_DOWNLOAD=1` nothing is downloaded and you place the binary at `<pkg>/bin/doobie-bin` yourself.
 
 ## Quick start
