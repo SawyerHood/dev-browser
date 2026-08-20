@@ -14,7 +14,7 @@ await page.goto("https://example.com");
 await page.snapshot({ interactive: true })
 EOF
 # - heading "Example Domain" [level=1] [ref=e3]
-# - link "Learn more" [ref=e6] [cursor=pointer]:
+# - link "Learn more" [ref=e6]:
 #   - /url: https://iana.org/domains/example
 
 doobie -e 'const p = await browser.getPage("main"); await p.click("ref/e6"); await p.waitForLoad(); p.url()'

@@ -53,7 +53,7 @@ test("renders roles, names, states and refs on a form", async () => {
     expect(yaml).toContain('heading "Sign up" [level=1]');
     expect(yaml).toMatch(/- textbox "Name" \[ref=e\d+\]: bob/);
     expect(yaml).toMatch(/- button "Go" \[ref=e\d+\]/);
-    expect(yaml).toMatch(/- link "Next page" \[ref=e\d+\] \[cursor=pointer\]:\n\s+- \/url: \/next/);
+    expect(yaml).toMatch(/- link "Next page" \[ref=e\d+\]:\n\s+- \/url: \/next/);
     expect(yaml).toMatch(/- checkbox "Agree" \[checked\] \[ref=e\d+\]/);
     expect(yaml).toMatch(/- combobox "Color" \[ref=e\d+\]:\n\s+- option "Red"\n\s+- option "Blue" \[selected\]/);
     expect(yaml).toContain('- form "signup"');

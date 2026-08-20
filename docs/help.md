@@ -109,7 +109,8 @@ FLAGS
   (headings, generics and text containers included, not just controls); plain text / presentational nodes have none:
     - heading "Sign in" [level=1] [ref=e2]
     - textbox "Email" [ref=e3]
-    - button "Continue" [ref=e4] [cursor=pointer]
+    - button "Continue" [ref=e4]
+    - generic "Toggle" [ref=e7] [cursor=pointer]      ([cursor=pointer] marks clickable non-control elements only)
     - link "Forgot password?" [ref=e5]:
       - /url: /reset
     - checkbox "Remember me" [checked] [ref=e6]        (also [disabled] [expanded] [pressed] [selected] [active])

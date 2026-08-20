@@ -20,7 +20,7 @@
  * backticks or "${" inside the script body.
  */
 
-export const INPAGE_VERSION = 2;
+export const INPAGE_VERSION = 3;
 
 export const INPAGE_SCRIPT: string = String.raw`(() => {
   if (window.__doobie && window.__doobie.version === ${INPAGE_VERSION}) return;
@@ -345,7 +345,8 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
     return accessibleName;
   }
   const kDescendantNameFromContentRoles = ["","caption","code","contentinfo","definition","deletion","emphasis","insertion","list","listitem","mark","none","paragraph","presentation","region","row","rowgroup","section","strong","subscript","superscript","table","term","time","generic"];
-  const kNameFromContentRoles = ["button","cell","checkbox","columnheader","gridcell","heading","link","menuitem","menuitemcheckbox","menuitemradio","option","radio","row","rowheader","switch","tab","tooltip","treeitem"];
+  // "row" is deliberately omitted: its content name repeats every cell/link of the row (very costly on tables).
+  const kNameFromContentRoles = ["button","cell","checkbox","columnheader","gridcell","heading","link","menuitem","menuitemcheckbox","menuitemradio","option","radio","rowheader","switch","tab","tooltip","treeitem"];
   function getTextAlternativeInternal(element, options) {
     if (options.visitedElements.has(element)) return "";
     const childOptions = Object.assign({}, options, { embeddedInTargetElement: options.embeddedInTargetElement === "self" ? "descendant" : options.embeddedInTargetElement });
@@ -819,6 +820,10 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
   }
 
   function hasPointerCursor(ariaNode) { return ariaNode.box.cursor === "pointer"; }
+  // Roles that are interactive by definition: [cursor=pointer] adds nothing for them
+  // (it is ~20% of a link-heavy snapshot), so it is only rendered on other roles.
+  const kImplicitlyClickableRoles = new Set(["link","button","checkbox","radio","combobox","textbox","searchbox","menuitem","menuitemcheckbox","menuitemradio","tab","switch","option","slider","spinbutton","listbox","menu","menubar","tablist","treeitem"]);
+  function showsPointerCursor(ariaNode) { return hasPointerCursor(ariaNode) && !kImplicitlyClickableRoles.has(ariaNode.role); }
 
   function renderAriaTree(ariaSnapshot, options) {
     const lines = [];
@@ -856,7 +861,7 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
           const r = ariaNode.box.rect;
           key += " [box=" + Math.round(r.left + offX) + "," + Math.round(r.top + offY) + "," + Math.round(r.width) + "," + Math.round(r.height) + "]";
         }
-        if (renderCursorPointer && hasPointerCursor(ariaNode)) key += " [cursor=pointer]";
+        if (renderCursorPointer && showsPointerCursor(ariaNode)) key += " [cursor=pointer]";
       }
       if (depthCut) key += " [\u2026]"; // children hidden by opts.depth; scope into this ref to see them
       return key;

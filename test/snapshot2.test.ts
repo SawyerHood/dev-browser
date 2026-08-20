@@ -61,7 +61,7 @@ test("name-from-content recurses into wrapping descendants (span/b/div/img/label
     `);
     const y = (await page.snapshot()) as string;
     expect(y).toMatch(/- button "Save" \[ref=e\d+\]$/m);
-    expect(y).toMatch(/- link "Docs \(new\)" \[ref=e\d+\] \[cursor=pointer\]:\n\s+- \/url: \/docs/);
+    expect(y).toMatch(/- link "Docs \(new\)" \[ref=e\d+\]:\n\s+- \/url: \/docs/);
     expect(y).toMatch(/- heading "Title" \[level=1\]/);
     expect(y).toMatch(/- cell "cell"/);
     expect(y).toMatch(/- button "First Second"/);
@@ -87,7 +87,7 @@ test("inline spans under a link/pointer ancestor do not become ref'd generic lin
     `);
     const y = (await page.snapshot()) as string;
     // single link line with inlined text, no generic child line
-    expect(y).toMatch(/- link "openrouter.ai" \[ref=e\d+\] \[cursor=pointer\]:\n\s+- \/url: \/x\n/);
+    expect(y).toMatch(/- link "openrouter.ai" \[ref=e\d+\]:\n\s+- \/url: \/x\n/);
     expect(y).not.toMatch(/- generic[^\n]*: openrouter.ai/);
     // the outermost pointer element carries the ref and [cursor=pointer]
     expect(y).toMatch(/- generic \[ref=e\d+\] \[cursor=pointer\]:\n\s+- text: Label\n\s+- generic: Block\n\s+- generic \[ref=e\d+\]: own\n\s+- generic \[ref=e\d+\]: tab/);
@@ -95,7 +95,7 @@ test("inline spans under a link/pointer ancestor do not become ref'd generic lin
     expect(y).toMatch(/- generic \[ref=e\d+\] \[cursor=pointer\]: lonely pointer/);
     // interactive mode: link is a single line with url; the card's non-clickable parts are not "interactive"
     const i = (await page.snapshot({ interactive: true })) as string;
-    expect(i).toMatch(/- link "openrouter.ai" \[ref=e\d+\] \[cursor=pointer\]:\n\s+- \/url: \/x/);
+    expect(i).toMatch(/- link "openrouter.ai" \[ref=e\d+\]:\n\s+- \/url: \/x/);
     expect(i).not.toMatch(/- generic: Block/);
     expect(i).toMatch(/- generic \[ref=e\d+\]: own/);
   });
@@ -313,8 +313,8 @@ test("urls: false drops the /url lines", async () => {
     expect(withUrls).toContain("- /url: /one");
     const noUrls = (await page.snapshot({ urls: false })) as string;
     expect(noUrls).not.toContain("/url");
-    expect(noUrls).toMatch(/- link "One" \[ref=e\d+\] \[cursor=pointer\]$/m);
-    expect(noUrls).toMatch(/- link "Two!" \[ref=e\d+\] \[cursor=pointer\]$/m);
+    expect(noUrls).toMatch(/- link "One" \[ref=e\d+\]$/m);
+    expect(noUrls).toMatch(/- link "Two!" \[ref=e\d+\]$/m);
     expect(noUrls.length).toBeLessThan(withUrls.length);
     const inter = (await page.snapshot({ interactive: true, urls: false })) as string;
     expect(inter).not.toContain("/url");
