@@ -29,7 +29,7 @@
 4. **Known, documented limits** (candidates for code fixes): ref on an element moved to another frame acts on wrong coordinates; sync CPU loops are not preempted by the deadline (watchdog restart); a long single action (type with delay) holds the front lock for other tabs.
 5. **Cleanup requested by the round-2 reports**: export `rememberNoSandbox`/`isSandboxError` from `src/daemon/sources/launch.ts` and drop the local copies in `src/cli/commands/chrome.ts` (TODO comment marks the spot).
 6. **Windows** — deliberately after 1.0.
-7. Small items from review notes: `instanceof Error/Array/Promise` are false for Puppeteer-returned values (realm split; doc or inject host constructors), saveFile non-string arg message, shot file perms 0644 vs 0600, dynamic `import()` opaque error, unhandled promise rejections in scripts not surfaced.
+7. Small items from review notes: `instanceof Array/Promise` are false for Puppeteer-returned values (realm split; Error family is shared now), saveFile non-string arg message, shot file perms 0644 vs 0600, dynamic `import()` opaque error, unhandled promise rejections in scripts not surfaced.
 
 ## How to resume
 

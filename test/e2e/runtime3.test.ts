@@ -268,3 +268,11 @@ name`;
     fs.rmSync(dir, { recursive: true, force: true });
   }, 30_000);
 });
+
+describe("realm", () => {
+  test("instanceof Error holds for Puppeteer errors and script errors", async () => {
+    const r = await cli.run([...H, "-e", 'const p = await browser.getPage("realm"); let a, b; try { await p.click("#nope") } catch (e) { a = e instanceof Error } try { throw new TypeError("x") } catch (e) { b = e instanceof Error && e instanceof TypeError } [a, b]']);
+    expect(JSON.parse(r.stdout)).toEqual([true, true]);
+    expect(r.code).toBe(0);
+  }, 20_000);
+});

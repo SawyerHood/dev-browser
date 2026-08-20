@@ -597,6 +597,15 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
       console: consoleApi,
       saveFile,
       readFile,
+      // Share the host's Error family so `e instanceof Error` holds for errors thrown by
+      // Puppeteer (host realm) as well as by the script itself.
+      Error,
+      TypeError,
+      RangeError,
+      ReferenceError,
+      SyntaxError,
+      EvalError,
+      URIError,
       ...gate.timerGlobals(),
       queueMicrotask,
       structuredClone,
