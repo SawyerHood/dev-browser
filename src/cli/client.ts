@@ -391,6 +391,11 @@ function talk(conn: Conn, req: Request, opts: SendOptions): Promise<"ok" | "retr
           conn.write(encodeFrame({ type: "shutdown" }));
           continue;
         }
+        if (f.type === "error" && f.kind === "daemon" && /shutting down/.test(f.message)) {
+          // We raced a daemon that is exiting (stop/upgrade): retry against its successor.
+          retry = true;
+          continue;
+        }
         if (retry) continue; // nothing else from an old daemon is shown
         resetTimer(opts.idleTimeoutMs);
         opts.onFrame(f);
