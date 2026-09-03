@@ -1,42 +1,14 @@
-
-_scratch/
-!bin/dev-browser.js
-.dev-browser/
-.DS_Store
+ref/
+node_modules/
+dist/
+build/
+bin/dev-browser-bin
+coverage/
+tmp/
 .env
 .env.*.local
-.env.local
 .idea/
-.output/
 .vscode/
-.wxt/
-*.log
-*.swo
-*.swp
 *.tsbuildinfo
-# Browser profiles
-# Build output
-# Dependencies
-# Environment files
-# IDE
-# Logs
-# OS
-# Temporary files
-# Test coverage
-# TypeScript cache
-# WXT generated files
-bin/dev-browser-*
-build/
-**/target/
-coverage/
-daemon/dist/*
-daemon/node_modules/
-dist/
-node_modules/
-npm-debug.log*
-profiles/
-temp/
-Thumbs.db
-tmp/
-yarn-debug.log*
-yarn-error.log*
+*.log
+.DS_Store

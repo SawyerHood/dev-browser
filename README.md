@@ -1,222 +1,134 @@
-<p align="center">
-  <img src="assets/header.png" alt="Dev Browser - Browser automation for Claude Code" width="100%">
-</p>
+# dev-browser
 
-Brought to you by [Do Browser](https://dobrowser.io).
+Browser automation CLI for coding agents: Puppeteer scripts, named pages, snapshot refs, one warm daemon.
 
-A browser automation tool that lets AI agents and developers control browsers with sandboxed JavaScript scripts.
-
-**Key features:**
-
-- **Sandboxed execution** - Scripts run in a QuickJS WASM sandbox with no host access
-- **Persistent pages** - Navigate once, interact across multiple scripts
-- **Auto-connect** - Connect to your running Chrome or launch a fresh Chromium
-- **Full Playwright API** - goto, click, fill, locators, evaluate, screenshots, and more
-
-## Demo
-
-https://github.com/user-attachments/assets/c6cf7fb9-b1dc-46ed-93b9-6e7240990c53
-
-## CLI Installation
+An agent (Claude Code, Codex, ...) pipes a short JavaScript snippet into `dev-browser`; the snippet runs against a real Chrome
+that stays open between calls. Pages have names (`browser.getPage("checkout")`) so each step resumes where the last one
+stopped. `page.snapshot()` returns an ARIA tree with refs (`e12`), and `page.click("ref/e12")` acts on them. Typical
+warm call: about 15 ms.
 
 ```bash
-npm install -g dev-browser
-dev-browser install    # installs Playwright + Chromium
-```
-
-### Quick start
-
-```bash
-# Launch a headless browser and run a script
-dev-browser --headless <<'EOF'
+dev-browser <<'EOF'
 const page = await browser.getPage("main");
-await page.goto("https://example.com", { waitUntil: "domcontentloaded" });
-console.log(await page.title());
+await page.goto("https://example.com");
+await page.snapshot({ interactive: true })
 EOF
+# - heading "Example Domain" [level=1] [ref=e3]
+# - link "Learn more" [ref=e6]:
+#   - /url: https://iana.org/domains/example
 
-# Connect to your running Chrome (enable at chrome://inspect/#remote-debugging)
-dev-browser --connect <<'EOF'
-const tabs = await browser.listPages();
-console.log(JSON.stringify(tabs, null, 2));
-EOF
+dev-browser -e 'const p = await browser.getPage("main"); await p.click("ref/e6"); await p.waitForLoad(); p.url()'
 ```
 
-### PowerShell (Windows)
-
-```powershell
-@"
-const page = await browser.getPage("main");
-await page.goto("https://example.com", { waitUntil: "domcontentloaded" });
-console.log(await page.title());
-"@ | dev-browser
-```
-
-With `--connect`:
-
-```powershell
-@"
-const page = await browser.getPage("main");
-console.log(await page.title());
-"@ | dev-browser --connect
-```
-
-### Windows notes
-
-PowerShell install:
-
-```powershell
-npm install -g dev-browser
-dev-browser install
-```
-
-To attach to a running Chrome instance on Windows:
-
-```powershell
-chrome.exe --remote-debugging-port=9222
-dev-browser --connect
-```
-
-Windows npm installs download the native `dev-browser-windows-x64.exe` release asset during `postinstall`, and the generated npm shims invoke that executable directly.
-
-### Using with AI agents
-
-After installing, tell your agent to run `dev-browser --help` — the help output includes the current LLM usage guide and API reference.
-
-For agents that discover local skills, install or refresh the embedded skill explicitly:
+## Install
 
 ```bash
-dev-browser install-skill --codex   # ~/.codex/skills/dev-browser/SKILL.md
-dev-browser install-skill --claude  # ~/.claude/skills/dev-browser/SKILL.md
-dev-browser install-skill --agents  # ~/.agents/skills/dev-browser/SKILL.md
+npm install -g dev-browser          # or download a binary from GitHub Releases
+dev-browser install                 # only if the first run says "No Chrome found" (downloads Chrome for Testing, ~150 MB)
+dev-browser install-skill           # optional: SKILL.md for Claude Code / Codex / ~/.agents
 ```
 
-Flags may be combined. With an interactive terminal, `dev-browser install-skill` prompts for targets. In non-interactive environments it updates all three locations, including Codex, so an older copied skill does not survive a CLI upgrade.
+macOS and Linux. Windows is not yet supported. Requires nothing else at runtime: the binary embeds Bun, Puppeteer and
+the zip extractor used by `dev-browser install` (no `unzip` needed); the npm package has no runtime dependencies, its
+postinstall only downloads the binary for your platform. Snap-packaged Chromium on Ubuntu cannot read `~/.dev-browser/v1`;
+use `dev-browser install` or `DEV_BROWSER_CHROME` there.
 
-### Idle browser cleanup
+If your package manager blocks install scripts (`bun add -g dev-browser`, pnpm before `pnpm approve-builds`, `npm --ignore-scripts`),
+the first `dev-browser` run downloads the binary itself (`dev-browser: downloading binary v...`). To fetch it eagerly instead:
+`bun pm -g trust dev-browser`, `pnpm approve-builds -g dev-browser`, or `npm rebuild -g dev-browser`. Behind a mirror set
+`DEV_BROWSER_DOWNLOAD_BASE=https://mirror/path/v1.0.0` (must serve `dev-browser-<os>-<arch>` and `SHA256SUMS`); with
+`DEV_BROWSER_SKIP_DOWNLOAD=1` nothing is downloaded and you place the binary at `<pkg>/bin/dev-browser-bin` yourself.
 
-Daemon-launched named Chromium instances can be closed automatically after they have been idle for a configured duration:
+## Quick start
 
 ```bash
-dev-browser --idle-timeout 5m < script.js
-DEV_BROWSER_IDLE_TIMEOUT_MS=300000 dev-browser status
+dev-browser --help                  # the full agent-facing guide (also docs/help.md)
+dev-browser help workflow           # one topic
+dev-browser pages                   # open tabs and their names
+dev-browser --headless -e 'const p = await browser.getPage("x"); await p.goto("https://news.ycombinator.com"); await p.title()'
+dev-browser --connect               # attach to a Chrome started with `dev-browser chrome` (real profile, Google sign-in works)
+dev-browser stop                    # close browsers and the daemon
 ```
 
-The flag accepts `30s`, `5m`, `1h`, or raw milliseconds. You can also set a user default in `~/.dev-browser/config.json`:
+## Upgrading to 1.0
 
-```json
-{
-  "idleTimeout": "5m"
-}
+Version 1.0 replaces the 0.2 Playwright/QuickJS implementation with the faster Puppeteer/Bun implementation developed
+as doobie. State lives under `~/.dev-browser/v1`, so it cannot collide with a running 0.2 daemon or its incompatible
+profiles. Existing 0.2 state remains untouched.
+
+To copy durable state from doobie, stop it first and run:
+
+```bash
+doobie stop
+dev-browser migrate-from-doobie
 ```
 
-Precedence is `--idle-timeout`, then `DEV_BROWSER_IDLE_TIMEOUT_MS`, then `idleTimeout` in the user config, then disabled. Set any source to `0` to disable cleanup. The effective setting is sent to an already-running daemon and shown by `dev-browser status`.
+The migration copies state into an empty v1 directory and leaves `~/.doobie` unchanged. Existing scripts must move
+from Playwright helpers such as `snapshotForAI()` and `getByRef()` to `snapshot()` and `ref/eN`; the runtime is a
+`node:vm` isolation context, not a security sandbox. Windows and musl Linux binaries are not available in 1.0.
 
-Cleanup is applied independently to each named browser. Activity is measured from both the start and completion of each request, so running requests are never reaped. Only Chromium instances launched by dev-browser are eligible; browsers attached with `--connect` are never closed by idle cleanup. Closing an idle browser does not delete its profile directory, cookies, or login state, and the next request relaunches it from the same persistent profile. `dev-browser stop` keeps its existing behavior of stopping the daemon and all managed browser connections.
+Scripts get `browser` (`getPage`, `newPage`, `listPages`, `closePage`), `console`, `saveFile`/`readFile` (jailed to
+`~/.dev-browser/v1/tmp`) and the full Puppeteer `Page` API plus `page.snapshot`, `page.ref`, `page.shot`, `page.waitForLoad`,
+`page.fill`. Top-level `await` works and the last expression is the return value. Everything else is in
+[docs/help.md](docs/help.md).
 
-<details>
-<summary>Allowing dev-browser in Claude Code without permission prompts</summary>
+## MCP
 
-By default, Claude Code asks for approval each time it runs a bash command. You can pre-approve `dev-browser` so it runs without permission checks by adding it to the `allow` list in your settings.
+`dev-browser mcp --headless` is a stdio MCP server exposing `dev_browser_run`, `dev_browser_pages`, `dev_browser_browsers`, `dev_browser_stop` and `dev_browser_help` over the same daemon (`claude mcp add dev-browser -- dev-browser mcp --headless`).
 
-**Per-project** — add to `.claude/settings.json` in your project root:
+## How it works
 
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(dev-browser *)"
-    ]
-  }
-}
+- **Thin client, warm daemon.** The `dev-browser` binary connects to `~/.dev-browser/v1/daemon.sock`, sends one request, streams the
+  output, exits. If no daemon is running it starts one. The daemon keeps Chrome, Puppeteer, and page handles warm and
+  exits 15 minutes after its last browser closes.
+- **Puppeteer + `node:vm`.** Each script is wrapped in an async function and run in a fresh `vm` context inside the
+  daemon with real Puppeteer objects. This gives clean globals and fast startup; it is not a security boundary.
+- **Named pages.** `getPage(name)` maps a name to a Chrome tab (`~/.dev-browser/v1/pages/`), so state survives across scripts
+  and even daemon restarts. Names are scoped to one browser key (`default`, `default:headless`, `work`, ...). Launched
+  browsers use persistent profiles under `~/.dev-browser/v1/browsers/<name>/profile` (headless: `profile-headless`); headed
+  and headless are separate Chromes with separate profiles.
+- **Snapshot refs.** An in-page script renders an ARIA YAML tree and assigns stable refs to every visible element that
+  receives pointer events (`interactive: true` prunes to controls plus headings/landmarks); `ref/e12` is a registered
+  Puppeteer query handler, so it works in every selector API.
+- **One deadline.** `--timeout` (default 30 s) bounds connect + script + teardown; Puppeteer waits default to 5 s
+  (navigation 15 s); a script that outlives the deadline is stopped at its next page call. Exit codes: 0 ok, 1 error,
+  2 usage, 124 deadline.
+- **Attach, not just launch.** `--connect` attaches to any Chrome over CDP (auto-discovery, port, http, ws, or a raw
+  CDP unix socket) and only touches the tabs a script asks for (the user's other tabs keep their dialogs and scripts);
+  `dev-browser chrome` starts your installed Chrome with remote debugging on a dedicated profile and verifies it came up.
+- **Concurrent scripts.** Scripts run in parallel; only launch/connect, page creation and input on different tabs of one
+  browser (a bring-to-front lock, since background tabs do not process input) are serialized. Two scripts on the same
+  named page interleave. Per-script state (default timeouts, request interception) is reset when the script ends.
+
+## Performance
+
+Measured on Linux, headless, warm daemon, medians of 9 runs (`bun run build && bun run bench/run.ts --runs 9`):
+
+| scenario                              | time     |
+| ------------------------------------- | -------- |
+| `dev-browser -e '1+1'` (warm)              | ~13 ms   |
+| `getPage("x")` + `page.title()` (warm)| ~14 ms   |
+| `page.snapshot()` (SERP-like page, in-script) | ~18 ms |
+| `page.shot()` (viewport, in-script)   | ~36 ms   |
+| cold start (spawn daemon + launch headless Chrome) | ~280 ms |
+
+## Development
+
+```bash
+bun install
+bun run dev -- -e '1+1'        # run from source
+bun test                       # real headless Chrome tests
+bun run build                  # build/daemon.js + dist/dev-browser (single binary)
 ```
 
-**Per-user (global)** — add to `~/.claude/settings.json`:
+Design decisions and rationale: [docs/design-decisions.md](docs/design-decisions.md). Agent-facing reference:
+[docs/help.md](docs/help.md) (embedded verbatim in `dev-browser --help`).
 
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(dev-browser *)"
-    ]
-  }
-}
-```
+## Releasing
 
-The pattern `Bash(dev-browser *)` matches any command starting with `dev-browser ` followed by arguments (e.g. `dev-browser --headless`, `dev-browser --connect`). This is safe because dev-browser scripts run in a sandboxed QuickJS WASM environment with no host filesystem or network access.
-
-You can also allow related commands in the same list:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(dev-browser *)",
-      "Bash(npx dev-browser *)"
-    ]
-  }
-}
-```
-
-> **Tip:** If you've already been prompted and clicked "Always allow", Claude Code adds the specific command pattern automatically. The settings file approach lets you pre-approve it before the first run.
-
-</details>
-
-<details>
-<summary>Legacy Claude Code plugin installation</summary>
-
-### Claude Code
-
-```
-/plugin marketplace add sawyerhood/dev-browser
-/plugin install dev-browser@sawyerhood/dev-browser
-```
-
-Restart Claude Code after installation.
-
-</details>
-
-## Script API
-
-Scripts run in a sandboxed QuickJS runtime (not Node.js). Available globals:
-
-```javascript
-// Browser control
-browser.getPage(nameOrId)    // Get/create named page, or connect to tab by targetId
-browser.newPage()            // Create anonymous page (cleaned up after script)
-browser.listPages()          // List all tabs: [{id, url, title, name}]
-browser.closePage(name)      // Close a named page
-
-// File I/O (restricted to ~/.dev-browser/tmp/)
-await saveScreenshot(buf, name)   // Save screenshot buffer, returns path
-await writeFile(name, data)       // Write file, returns path
-await readFile(name)              // Read file, returns content
-
-// Output
-console.log/warn/error/info       // Routed to CLI stdout/stderr
-```
-
-Pages are full [Playwright Page objects](https://playwright.dev/docs/api/class-page) — `goto`, `click`, `fill`, `locator`, `evaluate`, `screenshot`, and everything else, including `page.snapshotForAI({ track?, depth?, timeout? })`, which returns `{ full, incremental? }` for AI-friendly page snapshots.
-
-Every page also exposes two computer-use toolsets:
-
-- `page.cua.*` — pixel/vision tier: `screenshot()` saves a JPEG whose pixels map 1:1 onto CSS coordinates at any DPR and returns `{ path, width, height }`; `click`, `doubleClick`, `drag`, `move`, `scroll`, `keypress`, and `type` act at those coordinates.
-- `page.domCua.*` — DOM-id tier: `getVisibleDom()` snapshots visible interactive elements as pseudo-HTML lines with `node_id=N`; `click`, `doubleClick`, and `scroll` act by node id (ids are only valid against the latest snapshot of the current document), plus `type` and `keypress` for the focused element.
-
-## Benchmarks
-
-| Method                  | Time    | Cost  | Turns | Success |
-| ----------------------- | ------- | ----- | ----- | ------- |
-| **Dev Browser**         | 3m 53s  | $0.88 | 29    | 100%    |
-| Playwright MCP          | 4m 31s  | $1.45 | 51    | 100%    |
-| Playwright Skill        | 8m 07s  | $1.45 | 38    | 67%     |
-| Claude Chrome Extension | 12m 54s | $2.81 | 80    | 100%    |
-
-_See [dev-browser-eval](https://github.com/SawyerHood/dev-browser-eval) for methodology._
+See [RELEASING.md](RELEASING.md) for release-candidate testing, the historical `v1.0.0` tag cleanup, trusted npm
+publishing, and post-release verification.
 
 ## License
 
 MIT
-
-## Author
-
-[Sawyer Hood](https://github.com/sawyerhood)

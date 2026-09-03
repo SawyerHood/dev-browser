@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-03
+
+- Replaced the Playwright/QuickJS runtime with the faster Puppeteer implementation developed as doobie.
+- Added persistent named pages, ARIA snapshot refs, tracked snapshot diffs, screenshots, deterministic request deadlines, concurrent scripts, Chrome attachment, and a stdio MCP server.
+- Added self-contained Bun binaries for macOS and glibc Linux with checksum-verified npm installation and first-run recovery.
+- Isolated the new daemon and profiles under `~/.dev-browser/v1` so upgrades cannot collide with the incompatible 0.2 runtime.
+- Added `dev-browser migrate-from-doobie`, which non-destructively copies durable doobie state into an empty v1 state directory.
+- Renamed the command, package, assets, environment variables, skill, documentation, and MCP tools from doobie to dev-browser.
+- Breaking: scripts now use Puppeteer rather than Playwright; `snapshotForAI()`/`getByRef()` become `snapshot()`/`ref/eN`; QuickJS security sandboxing, `cua`, `domCua`, Windows binaries, and musl binaries are not available.
+
 ## [0.2.9] - 2026-07-14
 
 - Added configurable per-browser idle cleanup with `--idle-timeout`, `DEV_BROWSER_IDLE_TIMEOUT_MS`, and `~/.dev-browser/config.json` support. Idle cleanup preserves persistent profiles, excludes externally connected Chrome, and safely rechecks activity under the per-browser lock before closing.

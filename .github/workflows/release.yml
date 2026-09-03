@@ -1,130 +1,80 @@
-name: Release
-
+name: release
 on:
   push:
-    tags:
-      - 'v*'
-
+    tags: ["v*"]
 jobs:
-  build-daemon:
-    name: Build Daemon Bundles
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: latest
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: cd daemon && pnpm install
-      - run: cd daemon && pnpm run bundle
-      - run: cd daemon && pnpm run bundle:sandbox-client
-      - uses: actions/upload-artifact@v4
-        with:
-          name: daemon-bundles
-          path: |
-            daemon/dist/daemon.bundle.mjs
-            daemon/dist/sandbox-client.js
-
-  build-binaries:
-    needs: build-daemon
-    strategy:
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            binary: dev-browser-darwin-arm64
-            source_binary: dev-browser
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            binary: dev-browser-darwin-x64
-            source_binary: dev-browser
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            binary: dev-browser-linux-x64
-            source_binary: dev-browser
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            binary: dev-browser-linux-arm64
-            cross: true
-            source_binary: dev-browser
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            binary: dev-browser-linux-musl-x64
-            cross: true
-            source_binary: dev-browser
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            binary: dev-browser-windows-x64.exe
-            source_binary: dev-browser.exe
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: daemon-bundles
-          path: daemon/dist/
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - name: Install cross (if needed)
-        if: matrix.cross
-        run: cargo install cross
-      - name: Build
-        shell: bash
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} --manifest-path cli/Cargo.toml
-          else
-            cargo build --release --target ${{ matrix.target }} --manifest-path cli/Cargo.toml
-          fi
-      - name: Rename binary
-        shell: bash
-        run: cp cli/target/${{ matrix.target }}/release/${{ matrix.source_binary }} ${{ matrix.binary }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.binary }}
-          path: ${{ matrix.binary }}
-
-  publish:
-    needs: build-binaries
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      # Required for npm trusted publishing (OIDC); also enables provenance.
       id-token: write
-
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          path: artifacts/
-      - uses: pnpm/action-setup@v4
-        with:
-          version: latest
+          bun-version: 1.3.14
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: 'https://registry.npmjs.org'
-      # Trusted publishing requires npm >= 11.5.1; node 22 ships an older npm.
+          registry-url: https://registry.npmjs.org
+      # npm trusted publishing requires npm >= 11.5.1. Authentication comes
+      # from GitHub OIDC, so no long-lived NPM_TOKEN is needed.
       - run: npm install -g npm@latest
-      - run: cd daemon && pnpm install && pnpm run bundle && pnpm run bundle:sandbox-client
-      - run: |
-          mkdir -p dist/bin dist/scripts dist/daemon/dist
-          cp bin/dev-browser.js dist/bin/
-          cp scripts/postinstall.js dist/scripts/
-          cp scripts/sync-version.js dist/scripts/ 2>/dev/null || true
-          cp daemon/dist/daemon.bundle.mjs dist/daemon/dist/
-          cp daemon/dist/sandbox-client.js dist/daemon/dist/
-          cp package.json dist/
-          cp README.md dist/
-          cp LICENSE dist/ 2>/dev/null || true
-      # No NODE_AUTH_TOKEN: auth comes from the OIDC trusted publisher config.
-      - run: cd dist && npm publish
-      - uses: softprops/action-gh-release@v2
+      - name: Verify tag matches package.json version
+        # postinstall downloads from releases/download/v<package.json version> and npm
+        # publishes <package.json version>, so the tag must be exactly v<version>
+        # (prereleases included: tag v1.2.0-rc.1 requires "version": "1.2.0-rc.1").
+        run: |
+          v="v$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "$v" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version ($v)"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches package.json"
+      - run: bun install --frozen-lockfile
+      - run: bun x tsc --noEmit
+      - name: Build all targets
+        run: |
+          bun run scripts/build.ts daemon
+          for t in bun-linux-x64 bun-linux-arm64 bun-darwin-arm64 bun-darwin-x64; do
+            name=$(echo $t | sed 's/^bun-//')
+            bun run scripts/build.ts all --target $t --outfile dist/dev-browser-$name
+          done
+          cd dist && sha256sum dev-browser-* > SHA256SUMS && cat SHA256SUMS
+      - name: Smoke test linux-x64 binary
+        run: |
+          chmod +x dist/dev-browser-linux-x64
+          out=$(dist/dev-browser-linux-x64 --version)
+          echo "$out"
+          v="$(node -p 'require("./package.json").version')"
+          case "$out" in *"$v"*) ;; *) echo "::error::--version output '$out' does not contain $v"; exit 1 ;; esac
+          dist/dev-browser-linux-x64 --help | head -n 1
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Package check (published tarball is shim + scripts only)
+        run: |
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e '
+            const [p] = require("/tmp/pack.json");
+            const files = p.files.map((f) => f.path).sort();
+            console.log(files.join("\n"));
+            const need = ["bin/dev-browser.cjs", "scripts/postinstall.cjs", "scripts/download-binary.cjs", "package.json"];
+            for (const n of need) if (!files.includes(n)) { console.error("missing " + n); process.exit(1); }
+            if (files.some((f) => f.startsWith("src/") || f.startsWith("bin/dev-browser-bin") || f.startsWith("dist/"))) { console.error("unexpected files in tarball"); process.exit(1); }
+            const pkg = require("./package.json");
+            if (pkg.name !== "dev-browser") { console.error("wrong package name " + pkg.name); process.exit(1); }
+            if (pkg.bin?.["dev-browser"] !== "./bin/dev-browser.cjs") { console.error("wrong dev-browser bin mapping"); process.exit(1); }
+            if (pkg.dependencies && Object.keys(pkg.dependencies).length) { console.error("package must not have runtime dependencies"); process.exit(1); }
+          '
+      - name: GitHub release
+        uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
-          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/dev-browser-*
+            dist/SHA256SUMS
+      - name: npm publish via trusted publishing
+        # Prereleases (version contains "-") go to the "next" dist-tag so `npm i -g dev-browser` stays on stable.
+        run: |
+          v="$(node -p 'require("./package.json").version')"
+          case "$v" in *-*) tag="--tag next" ;; *) tag="" ;; esac
+          npm publish --provenance --access public $tag
