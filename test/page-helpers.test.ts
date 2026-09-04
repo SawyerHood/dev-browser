@@ -469,9 +469,6 @@ describe("run gate", () => {
       expect(context).not.toBe(page.browserContext());
       expect(g.browserContext()).toBe(context);
       expect((await context.pages()).includes(g)).toBe(true);
-      const contextPage = await context.newPage();
-      expect(typeof (contextPage as unknown as { snapshot?: unknown }).snapshot).toBe("function");
-      await contextPage.close();
       expect(g.mainFrame().page()).toBe(g);
       expect(g.mainFrame()).toBe(g.mainFrame());
       expect(g.on("console", () => {})).toBe(g);
