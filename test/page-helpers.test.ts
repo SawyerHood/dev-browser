@@ -451,7 +451,24 @@ describe("run gate", () => {
     });
   });
 
-  test("gated results: browser/context/pages/mainFrame/popup keep proxy identity; setRequestInterception is undone at close", async () => {
+  test("BrowserContext results and their pages stay behind the run gate", async () => {
+    await withPage(async (page) => {
+      await page.goto(srv.url("/btn"));
+      const gate = new RunGate();
+      const g = gate.guard(page, "page");
+      const context = g.browserContext();
+      expect(context).not.toBe(page.browserContext());
+      expect(g.browserContext()).toBe(context);
+      const contextPages = await context.pages();
+      expect(contextPages.includes(g)).toBe(true);
+      expect(contextPages.includes(page)).toBe(false);
+      gate.close("ended");
+      await expect(context.pages()).rejects.toThrow(RunAbortedError);
+      await expect(context.newPage()).rejects.toThrow(RunAbortedError);
+    });
+  });
+
+  test("gated results: browser/pages/mainFrame/popup keep proxy identity; setRequestInterception is undone at close", async () => {
     await withPage(async (page) => {
       await page.goto(srv.url("/btn"));
       const gate = new RunGate();
@@ -465,10 +482,6 @@ describe("run gate", () => {
       expect(pages.includes(g)).toBe(true);
       expect(pages.includes(page)).toBe(false);
       expect(seen).toContain(page);
-      const context = g.browserContext();
-      expect(context).not.toBe(page.browserContext());
-      expect(g.browserContext()).toBe(context);
-      expect((await context.pages()).includes(g)).toBe(true);
       expect(g.mainFrame().page()).toBe(g);
       expect(g.mainFrame()).toBe(g.mainFrame());
       expect(g.on("console", () => {})).toBe(g);
@@ -476,8 +489,6 @@ describe("run gate", () => {
       g.on("request", (r) => void r.continue());
       await g.goto(srv.url("/btn"));
       gate.close("ended");
-      await expect(context.pages()).rejects.toThrow(RunAbortedError);
-      await expect(context.newPage()).rejects.toThrow(RunAbortedError);
       await sleep(100);
       // interception off: navigation works without any request listener
       await page.goto(srv.url("/btn"), { timeout: 3000 });
