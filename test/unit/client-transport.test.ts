@@ -8,7 +8,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { tryConnect } from "../../src/cli/client.ts";
-import { classifyLockHolder, keyFor, chromePortPids } from "../../src/daemon/browsers.ts";
+import { canonicalCdpKey, classifyLockHolder, keyFor, chromePortPids } from "../../src/daemon/browsers.ts";
 import { redactEndpoint } from "../../src/daemon/sources/cdp.ts";
 import { pickChromeForUser } from "../../src/cli/commands/chrome.ts";
 import { installedCandidates } from "../../src/shared/chrome.ts";
@@ -236,6 +236,18 @@ describe("CDP endpoint redaction", () => {
     expect(redactEndpoint("wss://chrome.browserless.io/?token=SECRET")).toBe("wss://chrome.browserless.io/");
     expect(redactEndpoint("wss://user:pw@host:443/path?x=1#f")).toBe("wss://host/path");
     expect(redactEndpoint("not a url?token=x")).toBe("not a url");
+  });
+
+  test("canonical identity hides credentials without aliasing distinct remote sessions", () => {
+    const first = canonicalCdpKey("wss://user:pw@chrome.browserless.io/?token=FIRST");
+    const second = canonicalCdpKey("wss://user:pw@chrome.browserless.io/?token=SECOND");
+    expect(first).toStartWith("cdp:wss://chrome.browserless.io/#");
+    expect(first).not.toContain("user");
+    expect(first).not.toContain("pw");
+    expect(first).not.toContain("FIRST");
+    expect(first).not.toBe(second);
+    expect(canonicalCdpKey("wss://user:pw@chrome.browserless.io/?token=FIRST")).toBe(first);
+    expect(canonicalCdpKey("wss://user:pw@chrome.browserless.io/?token=FIRST", true)).toBe(`${first}:insecure`);
   });
 });
 

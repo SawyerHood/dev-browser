@@ -96,6 +96,8 @@ Scripts get `browser` (`getPage`, `newPage`, `listPages`, `closePage`), `console
 - **Attach, not just launch.** `--connect` attaches to any Chrome over CDP (auto-discovery, port, http, ws, or a raw
   CDP unix socket) and only touches the tabs a script asks for (the user's other tabs keep their dialogs and scripts);
   `dev-browser chrome` starts your installed Chrome with remote debugging on a dedicated profile and verifies it came up.
+  Credentials and query parameters are redacted from status and logs, while distinct authenticated endpoints remain
+  isolated as separate browser sessions.
 - **Concurrent scripts.** Scripts run in parallel; only launch/connect, page creation and input on different tabs of one
   browser (a bring-to-front lock, since background tabs do not process input) are serialized. Two scripts on the same
   named page interleave. Per-script state (default timeouts, request interception) is reset when the script ends.

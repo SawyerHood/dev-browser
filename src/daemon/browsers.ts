@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import type { Browser, Target } from "puppeteer-core";
 import type { BrowserInfo, BrowserSourceSpec } from "../shared/protocol.ts";
 import { paths, sanitizeName } from "../shared/paths.ts";
@@ -37,6 +38,16 @@ export function keyFor(spec: BrowserSourceSpec): string {
     case "socket":
       return "socket:" + spec.path;
   }
+}
+
+/**
+ * Stable identity for a resolved CDP endpoint. Keep credentials out of the
+ * displayable portion while retaining them in an opaque digest so two remote
+ * sessions on the same provider can never alias each other.
+ */
+export function canonicalCdpKey(wsEndpoint: string, ignoreHTTPSErrors = false): string {
+  const digest = createHash("sha256").update(wsEndpoint).digest("hex").slice(0, 16);
+  return `cdp:${redactEndpoint(wsEndpoint)}#${digest}${ignoreHTTPSErrors ? ":insecure" : ""}`;
 }
 
 /** How long a launch waits for a profile held by a live, non-orphan Chrome that is on its way out. */
@@ -163,7 +174,7 @@ export class BrowserManager {
       wsEndpoint = r.resolved.wsEndpoint;
       // "9222", "http://127.0.0.1:9222" and "auto" may all be the same Chrome:
       // key the entry (and its page names) by the resolved ws endpoint.
-      const canonical = "cdp:" + redactEndpoint(wsEndpoint) + (spec.ignoreHTTPSErrors ? ":insecure" : "");
+      const canonical = canonicalCdpKey(wsEndpoint, spec.ignoreHTTPSErrors);
       if (canonical !== key) {
         this.aliases.set(key, canonical);
         const dup = this.entries.get(canonical);
