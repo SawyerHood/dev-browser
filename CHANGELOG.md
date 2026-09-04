@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0-rc.2] - 2026-09-04
 
-- Fixed the npm executable mapping for npm 12, which removed the `dev-browser` command from RC.1 while normalizing its published manifest.
+- Normalized the npm executable mapping for npm 12, avoiding a misleading publish-time manifest-correction warning. RC.1 remained installable.
 
 ## [1.0.0-rc.1] - 2026-09-04
 
