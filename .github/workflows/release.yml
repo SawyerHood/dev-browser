@@ -54,7 +54,9 @@ jobs:
         run: |
           npm pack --dry-run --json > /tmp/pack.json
           node -e '
-            const [p] = require("/tmp/pack.json");
+            const packed = JSON.parse(require("node:fs").readFileSync("/tmp/pack.json", "utf8"));
+            const p = Array.isArray(packed) ? packed[0] : packed;
+            if (!p || !Array.isArray(p.files)) { console.error("unexpected npm pack JSON output"); process.exit(1); }
             const files = p.files.map((f) => f.path).sort();
             console.log(files.join("\n"));
             const need = ["bin/dev-browser.cjs", "scripts/postinstall.cjs", "scripts/download-binary.cjs", "package.json"];
