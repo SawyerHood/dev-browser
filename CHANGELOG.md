@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-09-03
+## [1.0.0-rc.1] - 2026-09-04
 
 - Replaced the Playwright/QuickJS runtime with the faster Puppeteer implementation developed as doobie.
 - Added persistent named pages, ARIA snapshot refs, tracked snapshot diffs, screenshots, deterministic request deadlines, concurrent scripts, Chrome attachment, and a stdio MCP server.
