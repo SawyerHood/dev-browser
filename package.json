@@ -1,11 +1,11 @@
 {
   "name": "dev-browser",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0-rc.2",
   "description": "Browser automation CLI for coding agents: Puppeteer scripts, named pages, snapshot refs, one warm daemon.",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "dev-browser": "./bin/dev-browser.cjs"
+    "dev-browser": "bin/dev-browser.cjs"
   },
   "repository": {
     "type": "git",

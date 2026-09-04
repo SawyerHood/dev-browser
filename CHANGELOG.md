@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.2] - 2026-09-04
+
+- Fixed the npm executable mapping for npm 12, which removed the `dev-browser` command from RC.1 while normalizing its published manifest.
+
 ## [1.0.0-rc.1] - 2026-09-04
 
 - Replaced the Playwright/QuickJS runtime with the faster Puppeteer implementation developed as doobie.
