@@ -397,7 +397,7 @@ describe("package.json", () => {
       "docs/help.md",
       "skills/",
     ]);
-    expect(pkg.bin).toEqual({ "dev-browser": "./bin/dev-browser.cjs" });
+    expect(pkg.bin).toEqual({ "dev-browser": "bin/dev-browser.cjs" });
     expect(pkg.scripts.postinstall).toBe("node scripts/postinstall.cjs");
   });
 

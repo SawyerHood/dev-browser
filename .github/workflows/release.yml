@@ -74,7 +74,7 @@ jobs:
           node -e '
             const pkg = require("./package.json");
             if (pkg.name !== "dev-browser") { console.error("wrong package name " + pkg.name); process.exit(1); }
-            if (pkg.bin?.["dev-browser"] !== "./bin/dev-browser.cjs") { console.error("wrong dev-browser bin mapping"); process.exit(1); }
+            if (pkg.bin?.["dev-browser"] !== "bin/dev-browser.cjs") { console.error("wrong dev-browser bin mapping"); process.exit(1); }
             if (pkg.dependencies && Object.keys(pkg.dependencies).length) { console.error("package must not have runtime dependencies"); process.exit(1); }
           '
       - name: GitHub release
