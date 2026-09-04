@@ -303,6 +303,31 @@ describe("daemon and browser lifecycle", () => {
 });
 
 describe("hung scripts", () => {
+  test("detached continuations cannot use browser registry operations after a run ends", async () => {
+    srv.set("/gate-slow", async () => {
+      await sleep(150);
+      return "ok";
+    });
+    const r = await cli.run([...H, "-b", "gate", "-e", `
+      await browser.getPage("gate-victim");
+      void fetch(${JSON.stringify(srv.url("/gate-slow"))})
+        .then(() => browser.listPages())
+        .then(() => fetch(${JSON.stringify(srv.url("/gate-list-leaked"))}))
+        .catch(() => {});
+      void fetch(${JSON.stringify(srv.url("/gate-slow"))})
+        .then(() => browser.closePage("gate-victim"))
+        .then(() => fetch(${JSON.stringify(srv.url("/gate-close-leaked"))}))
+        .catch(() => {});
+      "scheduled"`]);
+    expect(r.code).toBe(0);
+    await sleep(350);
+    expect(srv.hits).not.toContain("GET /gate-list-leaked");
+    expect(srv.hits).not.toContain("GET /gate-close-leaked");
+    const pages = await cli.run([...H, "-b", "gate", "-e", `await browser.listPages()`]);
+    expect(JSON.parse(pages.stdout).some((p: { name: string | null }) => p.name === "gate-victim")).toBe(true);
+    await cli.run(["stop", "gate"]);
+  });
+
   test("a finite busy loop past the deadline still returns; the daemon stays healthy", async () => {
     const r = await cli.run([...H, "--timeout", "1", "-e", "const t = Date.now(); let i = 0; while (Date.now() - t < 2000) i++; 'done'"]);
     // the event loop was blocked so the deadline timer could not fire first; the value wins
@@ -491,7 +516,7 @@ describe("--connect to an existing Chrome", () => {
     expect(r).toEqual({ code: 0, stdout: "Life\n", stderr: "" });
     const b = await cli.run(["browsers"]);
     // the key is canonicalized to the resolved ws endpoint so that "9222", "http://..." and "auto" share one entry
-    expect(b.stdout).toMatch(new RegExp(`^cdp:ws://127\\.0\\.0\\.1:${port}/devtools/browser/[-0-9a-f]+  cdp  connected  \\d+ page\\(s\\)  idle \\d+s\\n$`));
+    expect(b.stdout).toMatch(new RegExp(`^cdp:ws://127\\.0\\.0\\.1:${port}/devtools/browser/[-0-9a-f]+#[0-9a-f]{16}  cdp  connected  \\d+ page\\(s\\)  idle \\d+s\\n$`));
   });
 
   test("--connect http://127.0.0.1:PORT reaches the same browser and the same named page", async () => {
@@ -515,7 +540,7 @@ describe("--connect to an existing Chrome", () => {
   test("dev-browser pages --connect lists the external Chrome's tabs", async () => {
     const r = await cli.run(["pages", "--connect", String(port)]);
     expect(r.code).toBe(0);
-    expect(r.stdout.split("\n")[0]).toMatch(new RegExp(`^cdp:ws://127\\.0\\.0\\.1:${port}/devtools/browser/[-0-9a-f]+:$`));
+    expect(r.stdout.split("\n")[0]).toMatch(new RegExp(`^cdp:ws://127\\.0\\.0\\.1:${port}/devtools/browser/[-0-9a-f]+#[0-9a-f]{16}:$`));
     expect(r.stdout).toContain(`  x  ${srv.url("/")}  "Life"`);
   });
 

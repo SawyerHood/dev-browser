@@ -451,7 +451,11 @@ function frontLocator<T extends object>(page: Page, locator: T): T {
       if (typeof v !== "function") return v;
       const fn = v as AnyFn;
       if (LOCATOR_ACTIONS.has(prop)) {
-        return (...args: unknown[]) => withFront(page, () => fn.apply(target, args) as Promise<unknown>);
+        return (...args: unknown[]) => {
+          const aborted = abortedByRun();
+          if (aborted) return aborted;
+          return withFront(page, () => fn.apply(target, args) as Promise<unknown>);
+        };
       }
       return (...args: unknown[]) => {
         const out = fn.apply(target, args);

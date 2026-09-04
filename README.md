@@ -91,8 +91,9 @@ Scripts get `browser` (`getPage`, `newPage`, `listPages`, `closePage`), `console
   receives pointer events (`interactive: true` prunes to controls plus headings/landmarks); `ref/e12` is a registered
   Puppeteer query handler, so it works in every selector API.
 - **One deadline.** `--timeout` (default 30 s) bounds connect + script + teardown; Puppeteer waits default to 5 s
-  (navigation 15 s); a script that outlives the deadline is stopped at its next page call. Exit codes: 0 ok, 1 error,
-  2 usage, 124 deadline.
+  (navigation 15 s). When a script finishes normally, reaches its deadline, or disconnects, its page, browser-context,
+  locator and browser-registry operations reject further work so detached continuations cannot affect later runs.
+  Exit codes: 0 ok, 1 error, 2 usage, 124 deadline.
 - **Attach, not just launch.** `--connect` attaches to any Chrome over CDP (auto-discovery, port, http, ws, or a raw
   CDP unix socket) and only touches the tabs a script asks for (the user's other tabs keep their dialogs and scripts);
   `dev-browser chrome` starts your installed Chrome with remote debugging on a dedicated profile and verifies it came up.

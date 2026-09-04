@@ -23,7 +23,7 @@
 import * as vm from "node:vm";
 import * as fs from "node:fs";
 import * as util from "node:util";
-import type { Page, ConsoleMessage } from "puppeteer-core";
+import type { BrowserContext, Page, ConsoleMessage } from "puppeteer-core";
 import { extendPage } from "../page/extend.ts";
 import type { ErrorFrame, Frame, PageInfo, ResultFrame, RunRequest } from "../shared/protocol.ts";
 import { EXIT_ERROR, EXIT_OK, EXIT_TIMEOUT } from "../shared/protocol.ts";
@@ -78,6 +78,16 @@ function isPage(v: unknown): v is Page {
 }
 function isBrowser(v: unknown): boolean {
   return !!v && typeof v === "object" && typeof (v as { pages?: unknown }).pages === "function" && typeof (v as { wsEndpoint?: unknown }).wsEndpoint === "function";
+}
+function isBrowserContext(v: unknown): v is BrowserContext {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    typeof (v as { pages?: unknown }).pages === "function" &&
+    typeof (v as { newPage?: unknown }).newPage === "function" &&
+    typeof (v as { browser?: unknown }).browser === "function" &&
+    typeof (v as { wsEndpoint?: unknown }).wsEndpoint !== "function"
+  );
 }
 function isFrame(v: unknown): boolean {
   return !!v && typeof v === "object" && typeof (v as { childFrames?: unknown }).childFrames === "function" && typeof (v as { page?: unknown }).page === "function";
@@ -288,7 +298,7 @@ export class RunGate {
   }
 
   /**
-   * Map a value coming out of a gated call: Pages, Browsers and Frames become
+   * Map a value coming out of a gated call: Pages, Browsers, BrowserContexts and Frames become
    * (identity-stable) gated proxies, arrays are mapped element-wise. Anything
    * else passes through untouched.
    */
@@ -300,6 +310,7 @@ export class RunGate {
       return this.guard(v, "page");
     }
     if (isBrowser(v)) return this.guard(v, "browser");
+    if (isBrowserContext(v)) return this.guard(v, "browserContext");
     if (isFrame(v)) return this.guard(v, "frame");
     if (Array.isArray(v) && v.length > 0 && v.length <= 1000 && (isPage(v[0]) || isFrame(v[0]))) return v.map((x) => this.mapValue(x));
     return v;
@@ -569,8 +580,8 @@ export async function runScript(req: RunRequest, ctx: RunContext): Promise<RunOu
         track(p, null);
         return gate.guard(p, "page");
       },
-      listPages: () => pages.listPages(),
-      closePage: (name: string) => pages.closePage(name),
+      listPages: () => (gate.finished ? gate.abortedCall() : pages.listPages()),
+      closePage: (name: string) => (gate.finished ? gate.abortedCall() : pages.closePage(name)),
     });
 
     const consoleApi = {

@@ -437,7 +437,21 @@ describe("run gate", () => {
     });
   });
 
-  test("gated results: browser()/pages()/mainFrame()/popup keep proxy identity; setRequestInterception is undone at close", async () => {
+  test("locator actions called from a closed run reject without touching the page", async () => {
+    await withPage(async (page) => {
+      await page.goto(srv.url("/btn"));
+      const gate = new RunGate();
+      const g = gate.guard(page, "page");
+      await withRun({ id: "locator", emit: () => {}, gate }, async () => {
+        const locator = g.locator("#b").setTimeout(3000);
+        gate.close("ended");
+        await expect(locator.click()).rejects.toThrow(RunAbortedError);
+      });
+      expect(await page.evaluate(() => (window as unknown as { clicked?: number }).clicked ?? 0)).toBe(0);
+    });
+  });
+
+  test("gated results: browser/context/pages/mainFrame/popup keep proxy identity; setRequestInterception is undone at close", async () => {
     await withPage(async (page) => {
       await page.goto(srv.url("/btn"));
       const gate = new RunGate();
@@ -451,6 +465,13 @@ describe("run gate", () => {
       expect(pages.includes(g)).toBe(true);
       expect(pages.includes(page)).toBe(false);
       expect(seen).toContain(page);
+      const context = g.browserContext();
+      expect(context).not.toBe(page.browserContext());
+      expect(g.browserContext()).toBe(context);
+      expect((await context.pages()).includes(g)).toBe(true);
+      const contextPage = await context.newPage();
+      expect(typeof (contextPage as unknown as { snapshot?: unknown }).snapshot).toBe("function");
+      await contextPage.close();
       expect(g.mainFrame().page()).toBe(g);
       expect(g.mainFrame()).toBe(g.mainFrame());
       expect(g.on("console", () => {})).toBe(g);
@@ -458,6 +479,8 @@ describe("run gate", () => {
       g.on("request", (r) => void r.continue());
       await g.goto(srv.url("/btn"));
       gate.close("ended");
+      await expect(context.pages()).rejects.toThrow(RunAbortedError);
+      await expect(context.newPage()).rejects.toThrow(RunAbortedError);
       await sleep(100);
       // interception off: navigation works without any request listener
       await page.goto(srv.url("/btn"), { timeout: 3000 });
