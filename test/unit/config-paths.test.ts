@@ -133,6 +133,13 @@ describe("LineDecoder", () => {
     expect(d.push("")).toEqual([]);
     expect(d.push(new TextEncoder().encode('{"a":3}\n\n{"a":4}\n'))).toEqual([{ a: 3 }, { a: 4 }]);
   });
+  test("UTF-8 code points split across byte chunks are preserved", () => {
+    const d = new LineDecoder<{ value: string }>();
+    const bytes = new TextEncoder().encode(encodeFrame({ value: "👋 café 漢字" }));
+    const frames: Array<{ value: string }> = [];
+    for (const byte of bytes) frames.push(...d.push(Uint8Array.of(byte)));
+    expect(frames).toEqual([{ value: "👋 café 漢字" }]);
+  });
   test("blank lines are skipped; incomplete tail is held", () => {
     const d = new LineDecoder();
     expect(d.push("\n  \n")).toEqual([]);

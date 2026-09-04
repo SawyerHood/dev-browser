@@ -245,10 +245,13 @@ export function encodeFrame(frame: object): string {
  */
 export class LineDecoder<T = unknown> {
   private buf = "";
+  private readonly decoder = new TextDecoder();
   constructor(private readonly maxLine = 50 * 1024 * 1024) {}
 
   push(chunk: string | Uint8Array): T[] {
-    this.buf += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+    // Socket chunks can split a multi-byte code point. Keep decoder state
+    // between byte chunks; a string chunk is a hard boundary, so flush first.
+    this.buf += typeof chunk === "string" ? this.decoder.decode() + chunk : this.decoder.decode(chunk, { stream: true });
     if (this.buf.length > this.maxLine) {
       throw new Error(`protocol line exceeds ${this.maxLine} chars`);
     }
