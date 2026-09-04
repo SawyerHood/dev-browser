@@ -11,11 +11,12 @@
  *   Refs are assigned to visible elements that receive pointer events, reused
  *   for the same element across calls (stored in a WeakMap/expando), and reset
  *   when the document changes. The script is idempotent: re-evaluating it is a no-op.
- * - Frames: the main frame is snapshotted first; same-origin iframes are
- *   recursed via Puppeteer `ElementHandle.contentFrame()` and rendered nested
+ * - Frames: the main frame is snapshotted first; all available iframes are
+ *   recursed via Puppeteer `ElementHandle.contentFrame()` and their own
+ *   isolated realms, then rendered nested
  *   under their iframe line, with refs prefixed `f<N>` (f1e5). The mapping
- *   fN -> Frame is stored on the page for resolveRef(). Cross-origin iframes
- *   render as `- iframe [ref=e9] [cross-origin]`.
+ *   fN -> { Frame, document } is stored on the page for resolveRef(). Frames
+ *   that disappear or cannot be evaluated render as `- iframe [ref=e9] [unavailable]`.
  * - Output is YAML in the Playwright/do-browser grammar:
  *     - role "name" [checked] [disabled] [expanded] [active] [level=N] [pressed] [selected] [ref=e5] [cursor=pointer]: text
  *     - /url: ...   - /placeholder: ...   - text: ...
@@ -41,9 +42,9 @@
  * - `boxes: true` appends ` [box=x,y,w,h]` after [ref=...] for ref'd elements;
  *   coordinates are MAIN-viewport CSS px (iframe offsets applied), for page.mouse.
  * - `urls: false` drops the `- /url: ...` lines under links (default true).
- * - Frame keys fN are stable per Frame object for the life of the page; a key
- *   is never reused for a different frame, so old f1e5 refs cannot act in the
- *   wrong frame.
+ * - Frame keys fN are stable per frame document. Same-document navigation
+ *   preserves a key; reload/full navigation/renderer swaps allocate a fresh
+ *   key. A key is never reused, so an old f1e5 cannot act in a new document.
  * - `depth`-cut nodes carry a trailing ` […]` marker (scope into them to see more).
  */
 import type { ElementHandle, Frame, Page } from "puppeteer-core";
@@ -55,7 +56,7 @@ export interface SnapshotOptions {
   track?: string;
   boxes?: boolean;
   maxChars?: number;
-  /** Include same-origin iframes. Default true. */
+  /** Include all available iframes, including cross-origin frames. Default true. */
   frames?: boolean;
   /** Include `- /url: ...` lines under links. Default true. */
   urls?: boolean;
@@ -67,10 +68,10 @@ export interface TrackedSnapshot {
 }
 
 export interface SnapshotState {
-  /** fN -> Frame for every live frame seen by any snapshot of this page (detached frames are pruned). */
-  frames: Map<string, Frame>;
-  /** Frame -> fN: stable key per Frame object. */
-  frameKeys: WeakMap<Frame, string>;
+  /** fN -> frame document seen by a snapshot (detached/navigated entries are pruned). */
+  frames: Map<string, { frame: Frame; document: object }>;
+  /** Isolated-world ExecutionContext (one per document) -> stable fN. */
+  frameKeys: WeakMap<object, string>;
   /** Last allocated frame key number; never reset while the page lives. */
   nextFrameKey: number;
   /** track name -> last full snapshot. */

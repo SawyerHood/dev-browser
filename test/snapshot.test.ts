@@ -215,7 +215,7 @@ test("diffLines produces +/- lines in order", () => {
   expect(diffLines(["a"], ["a"])).toBe("");
 });
 
-test("same-origin iframe is nested with f1 refs and clickable", async () => {
+test("available iframes are nested with document-scoped frame refs and clickable", async () => {
   await withPage(async (page) => {
     await page.goto(srv.url("/frames"));
     // wait for the child frame to load
@@ -225,7 +225,7 @@ test("same-origin iframe is nested with f1 refs and clickable", async () => {
     });
     const yaml = (await page.snapshot()) as string;
     expect(yaml).toMatch(/- iframe \[ref=e\d+\]:\n(\s+- generic \[ref=f1e\d+\]:\n)?\s+- button "Inner button" \[ref=f1e\d+\]/);
-    expect(yaml).toMatch(/- iframe \[ref=e\d+\] \[cross-origin\]/);
+    expect(yaml).toMatch(/- iframe \[ref=e\d+\]:\n\s+- button "x" \[ref=f2e\d+\]/);
     // nested indentation: child lines are deeper than the iframe line
     const lines = yaml.split("\n");
     const iIdx = lines.findIndex((l) => /- iframe \[ref=e\d+\]:/.test(l));
@@ -249,13 +249,15 @@ test("same-origin iframe is nested with f1 refs and clickable", async () => {
   });
 });
 
-test("cross-origin iframe (other port) renders the marker and is not recursed", async () => {
+test("cross-origin iframe (other port) is traversed and its refs are actionable", async () => {
   await withPage(async (page) => {
     await page.goto(srv.url("/xorigin"));
     const yaml = (await page.snapshot()) as string;
-    expect(yaml).toMatch(/- iframe \[ref=e\d+\] \[cross-origin\]/);
-    expect(yaml).not.toContain("Other origin");
-    expect(getSnapshotState(page).frames.size).toBe(0);
+    const ref = /- button "Other origin" \[ref=(f\d+e\d+)\]/.exec(yaml)?.[1];
+    expect(ref).toBeTruthy();
+    expect(yaml).not.toContain("[cross-origin]");
+    expect(await (await page.ref(ref!)).evaluate((e) => e.textContent)).toBe("Other origin");
+    expect(getSnapshotState(page).frames.size).toBe(1);
   });
 });
 
@@ -297,4 +299,3 @@ test("waitForSelector('ref/eN') and locator('ref/eN').click() work", async () =>
     expect(await page.title()).toBe("clicked");
   });
 });
-
