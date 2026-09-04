@@ -1,9 +1,0 @@
-node_modules/
-dist/
-build/
-coverage/
-*.log
-tmp/
-temp/
-profiles/
-bun.lock
