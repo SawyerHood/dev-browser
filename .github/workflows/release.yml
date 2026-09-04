@@ -52,16 +52,26 @@ jobs:
           (cd dist && sha256sum -c SHA256SUMS)
       - name: Package check (published tarball is shim + scripts only)
         run: |
-          npm pack --dry-run --json > /tmp/pack.json
+          pack_dir="$(mktemp -d)"
+          archive="$pack_dir/dev-browser-$(node -p 'require("./package.json").version').tgz"
+          npm pack --pack-destination "$pack_dir" >/dev/null
+          if [ ! -f "$archive" ]; then
+            echo "::error::npm pack did not create $archive"
+            exit 1
+          fi
+          tar -tzf "$archive" | sed 's#^package/##' | sort > "$pack_dir/files.txt"
+          cat "$pack_dir/files.txt"
+          for required in bin/dev-browser.cjs scripts/postinstall.cjs scripts/download-binary.cjs package.json; do
+            if ! grep -Fxq "$required" "$pack_dir/files.txt"; then
+              echo "::error::missing $required"
+              exit 1
+            fi
+          done
+          if grep -Eq '^(src/|bin/dev-browser-bin|dist/)' "$pack_dir/files.txt"; then
+            echo "::error::unexpected files in tarball"
+            exit 1
+          fi
           node -e '
-            const packed = JSON.parse(require("node:fs").readFileSync("/tmp/pack.json", "utf8"));
-            const p = Array.isArray(packed) ? packed[0] : packed;
-            if (!p || !Array.isArray(p.files)) { console.error("unexpected npm pack JSON output"); process.exit(1); }
-            const files = p.files.map((f) => f.path).sort();
-            console.log(files.join("\n"));
-            const need = ["bin/dev-browser.cjs", "scripts/postinstall.cjs", "scripts/download-binary.cjs", "package.json"];
-            for (const n of need) if (!files.includes(n)) { console.error("missing " + n); process.exit(1); }
-            if (files.some((f) => f.startsWith("src/") || f.startsWith("bin/dev-browser-bin") || f.startsWith("dist/"))) { console.error("unexpected files in tarball"); process.exit(1); }
             const pkg = require("./package.json");
             if (pkg.name !== "dev-browser") { console.error("wrong package name " + pkg.name); process.exit(1); }
             if (pkg.bin?.["dev-browser"] !== "./bin/dev-browser.cjs") { console.error("wrong dev-browser bin mapping"); process.exit(1); }
