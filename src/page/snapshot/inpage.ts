@@ -15,14 +15,15 @@
  *   ref(id)        -> Element | null   (accepts "e5" or "f1e5")
  *   box(id)        -> [x, y, w, h] | null   (frame-local viewport px)
  * }
- * window.__devBrowserRefState = { lastRef, refMap }: the ref counter + id map, kept outside the
- * versioned closure so a reinstall (INPAGE_VERSION bump on a long-lived page) never reuses ids.
+ * window.__devBrowserRefState = { lastRef, refMap, frameKey }: the ref counter, id map, and the
+ * document's last snapshotted frame prefix, kept outside the versioned closure so a reinstall
+ * (INPAGE_VERSION bump on a long-lived page) never reuses ids.
  *
  * NOTE: written with String.raw so regexes read like normal JS. Do not use
  * backticks or "${" inside the script body.
  */
 
-export const INPAGE_VERSION = 4;
+export const INPAGE_VERSION = 5;
 
 export const INPAGE_SCRIPT: string = String.raw`(() => {
   if (window.__devBrowser && window.__devBrowser.version === ${INPAGE_VERSION}) return;
@@ -664,8 +665,12 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
   const HasWeakRef = typeof WeakRef === "function";
 
   function localRefId(id) {
-    const m = /^(?:f\d+)?(e\d+)$/.exec(String(id));
-    return m ? m[1] : null;
+    const m = /^(f\d+)?(e\d+)$/.exec(String(id));
+    // A full frame ref is also a document-generation check. Host routing keeps
+    // the prefix intact so a delayed/retried query cannot resolve the same eN
+    // after this frame has navigated and received a new fN.
+    if (!m || (m[1] && m[1] !== refState.frameKey)) return null;
+    return m[2];
   }
   function refElement(id) {
     const local = localRefId(id);
@@ -1009,6 +1014,7 @@ export const INPAGE_SCRIPT: string = String.raw`(() => {
 
   function snapshot(opts) {
     opts = opts || {};
+    refState.frameKey = opts.refPrefix || "";
     const root = resolveScope(opts.scope);
     const tree = generateAriaTree(root, opts);
     if (opts.interactive) pruneInteractive(tree.root);

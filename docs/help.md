@@ -123,7 +123,7 @@ FLAGS
     - link "Forgot password?" [ref=e5]:
       - /url: /reset
     - checkbox "Remember me" [checked] [ref=e6]        (also [disabled] [expanded] [pressed] [selected] [active])
-    - iframe [ref=e9] [cross-origin]                   (same-origin iframes are inlined with refs like f1e5)
+    - iframe [ref=e9]: button "Pay" [ref=f1e5]         (all origins are inlined; inaccessible/detached: [unavailable])
     - text: Plain text nodes appear like this
   interactive: true  prunes to links/buttons/inputs/etc. plus headings/landmarks for context (keeps alerts/status/live
                      regions, dialog text, contenteditable editor text) — use it first on big pages.
@@ -134,19 +134,19 @@ FLAGS
                      snapshot on the first call and, prefixed "(page changed substantially; showing full snapshot)",
                      after navigation/big re-renders). Print .full on the first call, .incremental after acting — the
                      object itself prints as escaped JSON. Keep the options (interactive/scope/depth/urls) identical
-                     for one track name, otherwise the diff is every line. Frame keys f1, f2… are stable per frame.
+                     for one track name, otherwise the diff is every line. Frame keys survive hash/history navigation; reload/full navigation/renderer swaps allocate fresh keys.
   Over maxChars the YAML is cut at a line and ends with `# ... truncated at 20000 chars (N more lines). Narrow with
   snapshot({ scope: 'eN' }) or snapshot({ interactive: true }).` (with interactive on: scope / urls: false / depth / maxChars).
   The snapshot does not scroll or wait; call page.waitForLoad() first on dynamic pages.
 
 ## refs
-  Refs (e5, or f1e5 inside same-origin frame f1) come from the latest page.snapshot(); stable for the same element
+  Refs (e5, or f1e5 inside any available iframe f1) come from the latest page.snapshot(); stable for the same element
   while the document lives, reset by navigation/reload. Two ways to use one: await page.ref("e5") -> ElementHandle
   (click(), type(), evaluate(), boundingBox(), ...), or "ref/e5" as a selector: page.click("ref/e5"),
   page.type("ref/e7", "hi"), page.hover, focus, select, tap, $, $$, $eval, $$eval, fill, waitForSelector, locator.
-  Frame refs route automatically: page.click("ref/f1e5") acts inside frame f1. Stale ref error (page.ref and the
-  acting selector methods alike): `Ref "e5" is stale or unknown. Take a new page.snapshot() and use a fresh ref. (cause:
-  No element found for selector: ref/e5)` (or `Frame f1 ... is gone.`). Exceptions: page.$/$$ return null/[] (check
+  Frame refs route across all origins: page.click("ref/f1e5") acts inside f1. Each fN belongs to one document, preventing aliases after reload/navigation/renderer swap. Stale ref error (page.ref and the
+  acting selector methods alike): `Ref "e5" is stale or unknown. Take a new page.snapshot() and use a fresh ref. (cause: No
+  element found for selector: ref/e5)` (or `Frame f1 ... is gone/navigated.`). Exceptions: page.$/$$ return null/[] (check
   before use); page.locator("ref/e5") only reports `Timed out after waiting Nms`; waitForSelector("ref/e5") throws a
   TimeoutError `Waiting for selector \`ref/e5\` failed: Waiting failed: Nms exceeded` like CSS selectors.
   After any navigation or big DOM change: re-snapshot, then use fresh refs. Refs from the old document never act on

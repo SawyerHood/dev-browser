@@ -1,5 +1,5 @@
 /**
- * Host side of the snapshot: injects INPAGE_SCRIPT, recurses same-origin
+ * Host side of the snapshot: injects INPAGE_SCRIPT, recurses available
  * iframes, renders, tracks diffs, resolves refs. See ./index.ts for the contract.
  */
 import type { ElementHandle, Frame, Page } from "puppeteer-core";
@@ -49,9 +49,14 @@ interface InPageOptions {
  * isolated world persists per document exactly like the main world. This
  * also keeps `window.__devBrowser` invisible to page scripts.
  */
-interface Realm {
+interface DocumentContext {
   evaluate(expr: string): Promise<unknown>;
   evaluateHandle(expr: string): Promise<unknown>;
+}
+
+interface Realm extends DocumentContext {
+  /** CDP replaces this object whenever the frame gets a new document. */
+  readonly context?: DocumentContext;
 }
 function homeRealm(frame: Frame): Realm {
   // @internal in the public types, stable in practice (used by Locator/QueryHandler internally).
@@ -59,29 +64,9 @@ function homeRealm(frame: Frame): Realm {
 }
 
 /** One CDP round trip: install the in-page script if missing, then snapshot. */
-async function evaluateSnapshot(frame: Frame, opts: InPageOptions): Promise<InPageResult> {
+async function evaluateSnapshot(document: DocumentContext, opts: InPageOptions): Promise<InPageResult> {
   const expr = `${INPAGE_SCRIPT};\nwindow.__devBrowser.snapshot(${JSON.stringify(opts)})`;
-  return (await homeRealm(frame).evaluate(expr)) as InPageResult;
-}
-
-function originOf(url: string): string | null {
-  try {
-    const u = new URL(url);
-    if (u.protocol === "about:" || u.protocol === "blob:") return null; // inherits
-    if (u.protocol === "data:" || u.protocol === "javascript:") return "null";
-    return u.origin;
-  } catch {
-    return "null";
-  }
-}
-
-/** Same-origin check by URL (about:blank / srcdoc inherit the parent origin). */
-function isSameOrigin(parent: Frame, child: Frame): boolean {
-  const p = originOf(parent.url());
-  const c = originOf(child.url());
-  if (c === null) return true;
-  if (p === null) return c !== "null";
-  return p === c;
+  return (await document.evaluate(expr)) as InPageResult;
 }
 
 interface Ctx {
@@ -93,27 +78,57 @@ interface Ctx {
 }
 
 /**
- * Frame keys (f1, f2, ...) are stable per Frame object for the life of the page: a frame keeps its key across
- * snapshots (scoped or not) and new frames get fresh keys; a key is never reused for a different frame.
+ * Return the identity of the current frame document. Puppeteer's isolated-world
+ * object is stable for a Frame, but its ExecutionContext is replaced for every
+ * new document (including reloads and renderer swaps) and retained for
+ * same-document navigation.
  */
-function frameKeyFor(state: SnapshotState, frame: Frame): string {
-  let key = state.frameKeys.get(frame);
+async function frameDocument(frame: Frame): Promise<DocumentContext> {
+  const realm = homeRealm(frame);
+  if (!realm.context) await realm.evaluate("0");
+  if (!realm.context) throw new Error("Frame execution context is unavailable");
+  return realm.context;
+}
+
+/** Frame keys are stable per document and never reused. */
+function frameKeyFor(state: SnapshotState, frame: Frame, document: object): string {
+  let key = state.frameKeys.get(document);
   if (!key) {
     key = `f${++state.nextFrameKey}`;
-    state.frameKeys.set(frame, key);
+    state.frameKeys.set(document, key);
   }
-  state.frames.set(key, frame);
+  // A long-lived Puppeteer Frame may have navigated since its last snapshot.
+  for (const [oldKey, target] of state.frames) {
+    if (target.frame === frame && target.document !== document) state.frames.delete(oldKey);
+  }
+  state.frames.set(key, { frame, document });
   return key;
 }
 
 function pruneDetachedFrames(state: SnapshotState): void {
-  for (const [key, frame] of state.frames) if (frame.detached) state.frames.delete(key);
+  for (const [key, target] of state.frames) {
+    if (target.frame.detached || homeRealm(target.frame).context !== target.document) state.frames.delete(key);
+  }
 }
 
-/** Snapshot one frame and nest its same-origin iframes. Returns YAML lines (unindented). */
-async function snapshotFrame(frame: Frame, refPrefix: string, scope: string | undefined, frameDepth: number, ctx: Ctx, boxOffset: [number, number]): Promise<string[]> {
+/** Snapshot one frame and nest its available iframes. Returns YAML lines (unindented). */
+async function snapshotFrame(
+  frame: Frame,
+  refPrefix: string,
+  scope: string | undefined,
+  frameDepth: number,
+  ctx: Ctx,
+  boxOffset: [number, number],
+  expectedDocument?: object,
+): Promise<string[]> {
+  const document = (expectedDocument ?? (await frameDocument(frame))) as DocumentContext;
+  if (homeRealm(frame).context !== document) throw new Error("Frame document changed before snapshot");
   const t0 = performance.now();
-  const res = await evaluateSnapshot(frame, { ...ctx.inPageOpts, refPrefix, scope, boxOffset });
+  // Evaluate on the captured context, not the live realm: the latter waits for
+  // and follows a replacement context if navigation wins this race, which
+  // could install refPrefix from the old document into the new one.
+  const res = await evaluateSnapshot(document, { ...ctx.inPageOpts, refPrefix, scope, boxOffset });
+  if (homeRealm(frame).context !== document) throw new Error("Frame document changed during snapshot");
   ctx.timings.push(performance.now() - t0);
   if (res.truncated) ctx.droppedLines += res.droppedLines;
   const lines = res.yaml ? res.yaml.split("\n") : [];
@@ -128,7 +143,7 @@ async function snapshotFrame(frame: Frame, refPrefix: string, scope: string | un
     let suffix = "";
     try {
       const js = `window.__devBrowser ? window.__devBrowser.ref(${JSON.stringify(local)}) : null`;
-      const h = (await homeRealm(frame).evaluateHandle(js)) as unknown as ElementHandle<HTMLIFrameElement>;
+      const h = (await document.evaluateHandle(js)) as unknown as ElementHandle<HTMLIFrameElement>;
       const el = h.asElement();
       if (!el) {
         await h.dispose().catch(() => {});
@@ -136,21 +151,22 @@ async function snapshotFrame(frame: Frame, refPrefix: string, scope: string | un
       }
       handle = el as ElementHandle<Element>;
       const contentFrame = await (el as ElementHandle<HTMLIFrameElement>).contentFrame();
-      if (!contentFrame || !isSameOrigin(frame, contentFrame)) {
-        suffix = " [cross-origin]";
+      if (!contentFrame) {
+        suffix = " [unavailable]";
       } else if (frameDepth >= MAX_FRAME_DEPTH) {
         suffix = "";
       } else {
-        const key = frameKeyFor(ctx.state, contentFrame);
         try {
-          child = await snapshotFrame(contentFrame, key, undefined, frameDepth + 1, ctx, info.origin ?? boxOffset);
+          const document = await frameDocument(contentFrame);
+          const key = frameKeyFor(ctx.state, contentFrame, document);
+          child = await snapshotFrame(contentFrame, key, undefined, frameDepth + 1, ctx, info.origin ?? boxOffset, document);
         } catch {
-          suffix = " [cross-origin]";
+          suffix = " [unavailable]";
           child = [];
         }
       }
     } catch {
-      suffix = " [cross-origin]";
+      suffix = " [unavailable]";
     } finally {
       await handle?.dispose().catch(() => {});
     }
@@ -215,10 +231,14 @@ export async function snapshot(page: Page, opts: SnapshotOptions = {}): Promise<
   if (scopeFrame) {
     // Scope inside a previously snapshotted iframe: render that subtree (frame keys stay as they are).
     const key = scopeFrame[1]!;
-    const frame = state.frames.get(key);
-    if (!frame || frame.detached) throw new Error(`Frame ${key} from ref "${opts.scope}" is gone. Take a new page.snapshot().`);
-    const origin = opts.boxes ? await frameViewportOrigin(frame) : [0, 0];
-    lines = await snapshotFrame(frame, key, scopeFrame[2], 1, ctx, origin as [number, number]);
+    const target = state.frames.get(key);
+    if (!target || target.frame.detached) throw new Error(`Frame ${key} from ref "${opts.scope}" is gone. Take a new page.snapshot().`);
+    if (homeRealm(target.frame).context !== target.document) {
+      state.frames.delete(key);
+      throw new Error(`Frame ${key} from ref "${opts.scope}" navigated. Take a new page.snapshot() and use a fresh ref.`);
+    }
+    const origin = opts.boxes ? await frameViewportOrigin(target.frame) : [0, 0];
+    lines = await snapshotFrame(target.frame, key, scopeFrame[2], 1, ctx, origin as [number, number], target.document);
   } else {
     lines = await snapshotFrame(page.mainFrame(), "", opts.scope, 0, ctx, [0, 0]);
   }
@@ -255,7 +275,7 @@ function incrementalFor(prev: string | undefined, full: string, maxChars: number
   return truncateText(diff, maxChars, 0, opts);
 }
 
-/** Main-viewport origin of a frame's viewport: sum of iframe element content-box offsets up the same-origin chain. */
+/** Main-viewport origin of a frame's viewport: sum of iframe element content-box offsets up its ancestor chain. */
 async function frameViewportOrigin(frame: Frame): Promise<[number, number]> {
   let x = 0;
   let y = 0;
@@ -367,17 +387,22 @@ export function splitRef(ref: string): { frameKey: string | null; local: string 
 export function resolveRefFrame(page: Page, ref: string): Frame {
   const { frameKey } = splitRef(ref);
   if (!frameKey) return page.mainFrame();
-  const frame = getSnapshotState(page).frames.get(frameKey);
-  if (!frame || frame.detached) {
+  const state = getSnapshotState(page);
+  const target = state.frames.get(frameKey);
+  if (!target || target.frame.detached) {
     throw new Error(`Frame ${frameKey} from ref "${ref}" is gone. Take a new page.snapshot().`);
   }
-  return frame;
+  if (homeRealm(target.frame).context !== target.document) {
+    state.frames.delete(frameKey);
+    throw new Error(`Frame ${frameKey} from ref "${ref}" navigated. Take a new page.snapshot() and use a fresh ref.`);
+  }
+  return target.frame;
 }
 
 export async function resolveRef(page: Page, ref: string): Promise<ElementHandle<Element>> {
-  const { local } = splitRef(ref);
+  const { frameKey, local } = splitRef(ref);
   const frame = resolveRefFrame(page, ref);
-  const handle = (await frame.$(`ref/${local}`)) as ElementHandle<Element> | null;
+  const handle = (await frame.$(`ref/${frameKey ? ref : local}`)) as ElementHandle<Element> | null;
   if (!handle) {
     throw new Error(`Ref "${ref}" is stale or unknown. Take a new page.snapshot() and use a fresh ref.`);
   }

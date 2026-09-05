@@ -4,8 +4,9 @@
  *
  * The handler runs inside the page (serialized) in Puppeteer's ISOLATED
  * realm (`frame.isolatedRealm()`), which is where the snapshot installs the
- * ref map (window.__devBrowser) — invisible to page scripts. Frame-prefixed refs
- * (f1e5) are not handled here: extend.ts routes them to the right frame first.
+ * ref map (window.__devBrowser) — invisible to page scripts. extend.ts routes a
+ * frame-prefixed ref (f1e5) to its frame but retains the prefix; the in-page API
+ * validates it against the current document before returning an element.
  */
 import { Puppeteer } from "puppeteer-core";
 

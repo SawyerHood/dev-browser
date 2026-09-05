@@ -519,7 +519,7 @@ export function extendPage(page: Page): DevBrowserPage {
     return withFront(page, async () => {
       try {
         const m = FRAME_REF_RE.exec(selector);
-        if (m) return await fill(resolveRefFrame(page, m[1]! + m[2]!), `ref/${m[2]}`, text, opts);
+        if (m) return await fill(resolveRefFrame(page, m[1]! + m[2]!), `ref/${m[1]}${m[2]}`, text, opts);
         return await fill(page, selector, text, opts);
       } catch (err) {
         if (at && /no element matches|No element found for selector/i.test(String((err as Error)?.message))) throw staleRefError(selector, err, at);
@@ -540,7 +540,7 @@ export function extendPage(page: Page): DevBrowserPage {
           const m = FRAME_REF_RE.exec(selector as string);
           if (m) {
             const frame = resolveRefFrame(page, m[1]! + m[2]!) as unknown as Record<string, AnyFn>;
-            return await frame[name]!.call(frame, `ref/${m[2]}`, ...rest);
+            return await frame[name]!.call(frame, `ref/${m[1]}${m[2]}`, ...rest);
           }
         }
         return await orig.call(page, selector, ...rest);
@@ -605,7 +605,7 @@ export function extendPage(page: Page): DevBrowserPage {
   (p as Record<string, unknown>).locator = function (selectorOrFunc: unknown) {
     if (typeof selectorOrFunc === "string") {
       const m = FRAME_REF_RE.exec(selectorOrFunc);
-      if (m) return frontLocator(page, resolveRefFrame(page, m[1]! + m[2]!).locator(`ref/${m[2]}`)) as never;
+      if (m) return frontLocator(page, resolveRefFrame(page, m[1]! + m[2]!).locator(`ref/${m[1]}${m[2]}`)) as never;
     }
     return frontLocator(page, origLocator(selectorOrFunc as string));
   };

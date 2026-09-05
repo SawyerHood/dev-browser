@@ -38,6 +38,17 @@ dev-browser --connect unix:/path/to/cdp.sock -e '...'
   disconnects.
 - All page helpers (`snapshot`, `ref/`, `shot`, `waitForLoad`, `fill`) work
   unchanged because they only need a Puppeteer `Page`.
+- Snapshots traverse available cross-origin frames through their isolated realms.
+  Frame refs are document-scoped: same-document navigation preserves them, while
+  reload/full navigation/renderer swaps invalidate them before they can alias a
+  new document's element. Temporarily inaccessible frames are marked `[unavailable]`.
+- Puppeteer's `Frame.goto()` can reject with `TargetCloseError` when a native
+  Chrome/Electron frame navigation itself moves an out-of-process iframe back
+  into the parent's renderer: the old child CDP session closes before its
+  `Page.navigate` response arrives. Set the owning element's `src` from the
+  parent (`page.$eval('iframe', (el, url) => el.src = url, url)`) and wait for
+  the destination frame instead. Snapshot traversal and stale-ref invalidation
+  work across that renderer transition.
 - Downloads and the idle reaper are not configured for socket browsers.
 
 ## Verified
