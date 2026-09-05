@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.3] - 2026-09-05
+
+- Added cross-origin iframe contents to snapshots, with document-scoped frame refs that stay valid across same-document navigation and safely expire after reloads, full navigation, renderer swaps, or frame removal.
+
 ## [1.0.0-rc.2] - 2026-09-04
 
 - Normalized the npm executable mapping for npm 12, avoiding a misleading publish-time manifest-correction warning. RC.1 remained installable.
