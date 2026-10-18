@@ -67,7 +67,7 @@ describe("a browser kept behind", () => {
     }
   }, 30_000);
 
-  test("a background tab: input and raf waits work without front; a shot brings it forward only after the grace", async () => {
+  test("a background tab: input and raf waits work without front; a shot is brought forward at most once, after the grace", async () => {
     const a = counted(await browser.newPage(), "a");
     const b = counted(await browser.newPage(), "b");
     try {
@@ -86,7 +86,10 @@ describe("a browser kept behind", () => {
       const s = await a.shot();
       expect(s.width).toBe(1280);
       expect(Date.now() - t0).toBeLessThan(6000);
-      expect(fronted).toEqual(["a"]); // a background tab has no frame to capture: brought forward once it stalled
+      // Linux Chrome gives a background tab no frame to capture (brought forward once it stalls);
+      // macOS Chrome captures it in place.
+      expect(fronted.length).toBeLessThanOrEqual(1);
+      if (process.platform === "linux") expect(fronted).toEqual(["a"]);
     } finally {
       await a.close().catch(() => {});
       await b.close().catch(() => {});
