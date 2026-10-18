@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.4] - 2026-10-18
+
+- Stopped raising and focusing the user's own Chrome window on every action in attached browsers (`--connect`). Pages dev-browser opens there get a window of their own, opened behind the user's; touched tabs get focus emulation so input, waits and `requestAnimationFrame` keep working in the background; and only a screenshot of a background tab that stalls for 2 s brings it forward. A script's own `page.bringToFront()` still does.
+- In launched browsers, a page that is already showing is no longer brought to front again before each action.
+
 ## [1.0.0-rc.3] - 2026-09-05
 
 - Added cross-origin iframe contents to snapshots, with document-scoped frame refs that stay valid across same-document navigation and safely expire after reloads, full navigation, renderer swaps, or frame removal.
