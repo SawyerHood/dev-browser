@@ -74,7 +74,37 @@ describe("background tabs", () => {
     }
   }, 20_000);
 
-  test("front lock: bringToFront every time (no cache), ~1 ms per action; same-page actions join, other pages queue", async () => {
+  test("a page that is already showing is not brought to front (Chrome would raise and focus its window)", async () => {
+    const a = await newPage();
+    const b = await newPage();
+    try {
+      await a.goto(srv.url("/btn"));
+      await b.goto(srv.url("/btn"));
+      const fronted: string[] = [];
+      for (const [name, page] of [["a", a], ["b", b]] as const) {
+        const client = (page as unknown as { _client(): { send: (m: string, ...r: unknown[]) => Promise<unknown> } })._client();
+        const send = client.send.bind(client);
+        client.send = (method: string, ...rest: unknown[]) => {
+          if (method === "Page.bringToFront") fronted.push(name);
+          return send(method, ...rest);
+        };
+      }
+      await a.click("#b"); // a was hidden (b opened last): brought to front once
+      expect(fronted).toEqual(["a"]);
+      for (let i = 0; i < 5; i++) await a.click("#b");
+      await a.shot();
+      await a.keyboard.press("a");
+      expect(fronted).toEqual(["a"]); // a was showing for all of these
+      await b.click("#b"); // switching tabs still brings the other one forward
+      expect(fronted).toEqual(["a", "b"]);
+      expect(await b.evaluate(() => (window as unknown as { clicked: number }).clicked)).toBe(1);
+    } finally {
+      await a.close().catch(() => {});
+      await b.close().catch(() => {});
+    }
+  }, 20_000);
+
+  test("front lock: front check every time (no cache), ~1 ms per action; same-page actions join, other pages queue", async () => {
     await withPage(async (page) => {
       await page.goto(srv.url("/btn"));
       await ensureFront(page);

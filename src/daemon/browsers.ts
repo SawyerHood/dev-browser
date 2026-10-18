@@ -12,6 +12,7 @@ import { paths, sanitizeName } from "../shared/paths.ts";
 import type { FileLogger } from "../shared/log.ts";
 import { DEFAULTS } from "../shared/config.ts";
 import { PageRegistry } from "./pages.ts";
+import { keepBehind } from "../page/extend.ts";
 import { launchBrowser } from "./sources/launch.ts";
 import { connectCdp, redactEndpoint } from "./sources/cdp.ts";
 import { connectSocket } from "./sources/socket.ts";
@@ -220,7 +221,13 @@ export class BrowserManager {
         .catch(() => {});
     });
     const origNewPage = browser.newPage.bind(browser);
-    (browser as { newPage: Browser["newPage"] }).newPage = async (...args) => entry.pages.adopt(await origNewPage(...args));
+    if (!launched) keepBehind(browser);
+    // In someone's own browser a page dev-browser opens gets a window of its own, opened
+    // behind theirs: it is that window's active tab, so it renders and can be captured
+    // without ever being brought to front, and their own tabs stay as they left them.
+    const background: Parameters<Browser["newPage"]> = launched ? [] : [{ type: "window", background: true }];
+    (browser as { newPage: Browser["newPage"] }).newPage = async (...args) =>
+      entry.pages.adopt(await origNewPage(...(args.length > 0 ? args : background)));
 
     if (launched) {
       // When the profile was marked as a clean exit, Chrome does not restore the

@@ -218,8 +218,8 @@ FLAGS
   --connect ws://host:9222/devtools/browser/<id> -> connects directly;  --connect unix:/path/to.sock (or pipe:NAME)
   -> raw browser-level CDP, one JSON message per line (embedder hook).
   Attached browsers are never closed by --idle-timeout; `dev-browser stop <key>` only disconnects. Named pages work the same
-  (stored per endpoint; ws URL query/credentials are stripped from keys and logs); see the user's existing tabs with
-  browser.listPages(), then getPage(targetId). Only tabs you touch are extended (see `help pages`).
+  (stored per endpoint; ws URL query/credentials stripped from keys/logs); the user's tabs: browser.listPages(), getPage(targetId).
+  Only touched tabs are extended (`help pages`). Never raised: new pages open in a window of their own behind the user's, touched tabs get focus emulation, and only a background-tab shot stalled 2 s brings it forward (page.bringToFront() still does).
 
 ## chrome
   dev-browser chrome [--profile NAME] [--port N] [--chrome PATH] [--headless] [URL]   launch your real installed Chrome as

@@ -13,11 +13,14 @@
  * front one would hang. Every input/screenshot action runs under a per-Browser
  * front lock: `bringToFront()` then the action, serialized against actions on
  * other pages of the same browser (actions on the same page run concurrently
- * and skip the redundant bringToFront). No cache across time: the front tab
- * can change under us (user click, another CDP client), and bringToFront is a
- * ~1 ms round trip. Waits (waitForSelector/waitForFunction) bring their page
- * to front once at the start and register as "waiting": whenever the lock goes
- * idle after an action on another page, the waiting page is brought back.
+ * and skip the redundant bringToFront). A page that is already showing
+ * (visibilityState "visible") is left as it is: Chrome's bringToFront also
+ * raises and focuses the window, which steals the screen from someone using
+ * their own browser. No cache across time: the front tab can change under us
+ * (user click, another CDP client), and the check is a ~1 ms round trip.
+ * Waits (waitForSelector/waitForFunction) bring their page to front once at
+ * the start and register as "waiting": whenever the lock goes idle after an
+ * action on another page, the waiting page is brought back.
  *
  * Run gate: ElementHandle/JSHandle/Frame methods consult the calling run (see
  * run-context.ts) so objects that escaped the page proxies stop at their next
@@ -36,6 +39,7 @@ import {
   Locator,
   TimeoutError,
   type Browser,
+  type CDPSession,
   type Dialog,
   type GoToOptions,
   type HTTPResponse,
@@ -170,12 +174,93 @@ function refrontWaiting(st: FrontState): void {
   void withFront(target, async () => {});
 }
 
+/**
+ * Browsers that are someone's own (attached with --connect, not launched): their windows are
+ * never raised for an action. See keepBehind.
+ */
+const BEHIND = new WeakSet<Browser>();
+
+/**
+ * Never raise this browser's windows for dev-browser's own actions. Page.bringToFront does
+ * more than switch tabs: Chrome activates the tab's window, which raises it over everything
+ * and takes keyboard focus from whatever app the user is in, on every click, keystroke and
+ * shot. Instead each page gets focus emulation, which keeps a background tab (or a covered
+ * window) rendering, firing requestAnimationFrame and acking input. The one thing it does not
+ * give a background tab is a frame to capture: a screenshot that does not finish within
+ * CAPTURE_GRACE_MS brings the page to front after all (see withCapture). Pages dev-browser
+ * opens there get a window of their own, opened behind the user's (browsers.ts), so they are
+ * their window's active tab and screenshots never need that.
+ */
+export function keepBehind(browser: Browser): void {
+  BEHIND.add(browser);
+}
+
+function isBehind(page: Page): boolean {
+  const browser = browserOf(page);
+  return !!browser && BEHIND.has(browser);
+}
+
+/** How long a screenshot on a page kept behind may take before the page is brought to front. */
+const CAPTURE_GRACE_MS = 2_000;
+
 async function bringToFront(st: FrontState, page: Page): Promise<void> {
   st.fronted = page;
   try {
-    await (ORIG_BRING.get(page) ?? page.bringToFront.bind(page))();
+    if (isBehind(page)) return void (await emulateFocus(page));
+    // A tab that is already showing renders and acks input as it is, and bringing it to
+    // front would only raise its window: only a hidden one is brought forward.
+    if (await isShowing(page)) return;
+    await reallyBringToFront(page);
   } catch {
     /* closed page or unsupported target: let the action report the real error */
+  }
+}
+
+async function reallyBringToFront(page: Page): Promise<void> {
+  await (ORIG_BRING.get(page) ?? page.bringToFront.bind(page))();
+}
+
+const FOCUS_EMULATED = new WeakSet<Page>();
+
+/** Focus emulation, once per page: it lasts for as long as this connection to the browser. */
+async function emulateFocus(page: Page): Promise<void> {
+  if (FOCUS_EMULATED.has(page)) return;
+  FOCUS_EMULATED.add(page);
+  await page.emulateFocusedPage(true).catch(() => {});
+}
+
+/** How long to wait to learn whether a page is showing before bringing it to front anyway. */
+const SHOWING_TIMEOUT_MS = 250;
+
+/**
+ * Whether the page is its window's active tab in a window that is not minimized or covered
+ * (`document.visibilityState`). False when that cannot be learnt quickly (renderer busy),
+ * so the caller falls back to bringing the page to front.
+ */
+async function isShowing(page: Page): Promise<boolean> {
+  const client = cdpSessionOf(page);
+  if (!client) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const reply = await Promise.race([
+      client.send("Runtime.evaluate", { expression: "document.visibilityState", returnByValue: true }),
+      new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), SHOWING_TIMEOUT_MS))),
+    ]);
+    return reply?.result?.value === "visible";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function cdpSessionOf(page: Page): CDPSession | null {
+  const p = page as unknown as { _client?: () => CDPSession };
+  try {
+    const c = typeof p._client === "function" ? p._client() : null;
+    return c && typeof c.send === "function" ? c : null;
+  } catch {
+    return null;
   }
 }
 
@@ -185,17 +270,41 @@ async function bringToFront(st: FrontState, page: Page): Promise<void> {
  * current holder (nested Puppeteer calls, Promise.all on one page) and skip
  * the redundant bringToFront.
  */
-export async function withFront<T>(page: Page, action: () => Promise<T>): Promise<T> {
+export async function withFront<T>(page: Page, action: () => Promise<T>, opts: { really?: boolean } = {}): Promise<T> {
   const browser = browserOf(page);
   if (!browser) return action();
   const st = stateOf(browser);
   const joined = await acquire(st, page);
   try {
-    if (!joined) await bringToFront(st, page);
+    if (opts.really) {
+      st.fronted = page;
+      await reallyBringToFront(page).catch(() => {});
+    } else if (!joined) await bringToFront(st, page);
     return await action();
   } finally {
     release(st);
   }
+}
+
+/**
+ * A screenshot under the front lock. On a page kept behind (keepBehind) a background tab
+ * produces no frame to capture even with focus emulation, so a capture that has not finished
+ * within CAPTURE_GRACE_MS brings the page to front, after which it completes.
+ */
+export function withCapture<T>(page: Page, action: () => Promise<T>): Promise<T> {
+  return withFront(page, async () => {
+    const running = action();
+    if (!isBehind(page)) return running;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), CAPTURE_GRACE_MS)));
+    try {
+      const first = await Promise.race([running.then(() => "done" as const), late]);
+      if (first === "late") await reallyBringToFront(page).catch(() => {});
+      return await running;
+    } finally {
+      clearTimeout(timer);
+    }
+  });
 }
 
 /**
@@ -357,7 +466,8 @@ function patchProtos(
         const page = pageOf(this);
         if (!page) return fn.apply(this, args);
         const run = () => fn.apply(this, args) as Promise<unknown>;
-        return mode === "front" ? withFront(page, run) : withFrontWait(page, run);
+        if (mode === "wait") return withFrontWait(page, run);
+        return name === "screenshot" ? withCapture(page, run) : withFront(page, run);
       };
       Object.defineProperty(wrapped, "name", { value: name });
       Object.defineProperty(proto, name, { value: wrapped, writable: true, configurable: true, enumerable: false });
@@ -500,7 +610,9 @@ export function extendPage(page: Page): DevBrowserPage {
   // A script's own bringToFront goes through the lock too (so it cannot land between
   // another page's bringToFront and its action, and the lock knows who is in front).
   ORIG_BRING.set(page, page.bringToFront.bind(page));
-  (p as Record<string, unknown>).bringToFront = () => withFront(page, async () => {});
+  // It is the one call that really brings the page to front, kept behind or not: the
+  // script asked for it.
+  (p as Record<string, unknown>).bringToFront = () => withFront(page, async () => {}, { really: true });
 
   // Input devices: run under the front lock.
   for (const dev of ["mouse", "keyboard", "touchscreen"] as const) {
@@ -512,7 +624,7 @@ export function extendPage(page: Page): DevBrowserPage {
   // helpers
   p.snapshot = (opts?: SnapshotOptions) => snapshot(page, opts);
   p.ref = (id: string) => resolveRef(page, id);
-  p.shot = (opts?: ShotOptions) => withFront(page, () => shot(page, opts));
+  p.shot = (opts?: ShotOptions) => withCapture(page, () => shot(page, opts));
   p.waitForLoad = (opts?: WaitForLoadOptions) => waitForLoad(page, opts);
   p.fill = (selector: string, text: string, opts?: { delay?: number }) => {
     const at = isRefSelector(selector) ? new Error() : null;
@@ -557,7 +669,7 @@ export function extendPage(page: Page): DevBrowserPage {
 
   // screenshot: under the front lock (a background tab never produces a frame).
   const origScreenshot = page.screenshot.bind(page) as (...a: unknown[]) => Promise<unknown>;
-  (p as Record<string, unknown>).screenshot = (...args: unknown[]) => withFront(page, () => origScreenshot(...withRunPaths(args)));
+  (p as Record<string, unknown>).screenshot = (...args: unknown[]) => withCapture(page, () => origScreenshot(...withRunPaths(args)));
   // pdf({ path }): relative paths resolve against the caller's cwd, like screenshot.
   const origPdf = page.pdf.bind(page) as (...a: unknown[]) => Promise<unknown>;
   (p as Record<string, unknown>).pdf = (...args: unknown[]) => origPdf(...withRunPaths(args));
