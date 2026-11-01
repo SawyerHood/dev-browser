@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Reclaiming a profile held by an orphaned or leftover Chrome now sends SIGTERM and allows up to 5 s for a clean quit before SIGKILL. Chrome removes its per-launch state, such as the macOS code-sign clone of the app bundle, only on a clean exit, so the immediate SIGKILL leaked it on every reclaim.
+
 ## [1.0.0-rc.4] - 2026-10-18
 
 - Stopped raising and focusing the user's own Chrome window on every action in attached browsers (`--connect`). Pages dev-browser opens there get a window of their own, opened behind the user's; touched tabs get focus emulation so input, waits and `requestAnimationFrame` keep working in the background; and only a screenshot of a background tab that stalls for 2 s brings it forward. A script's own `page.bringToFront()` still does.
