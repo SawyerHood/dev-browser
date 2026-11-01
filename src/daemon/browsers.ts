@@ -536,7 +536,9 @@ function clearSingletonFiles(profileDir: string): void {
  * retry the launch, otherwise a short description of who holds it.
  *
  * - stale lock: clear the Singleton* files.
- * - orphan Chrome (parent daemon dead): SIGKILL it and wait for it to exit.
+ * - orphan Chrome (parent daemon dead): SIGTERM it, give it up to 5 s to quit
+ *   cleanly (Chrome deletes its per-launch state, such as the macOS code-sign
+ *   clone of the app bundle, only on a clean exit), then SIGKILL and wait.
  * - ours / foreign: never kill. Wait up to `waitMs` for the holder to let go
  *   (a daemon that is shutting down closes its Chrome within a second or so),
  *   then give up.
@@ -548,19 +550,30 @@ export async function reclaimProfile(
   opts: { waitMs: number } = { waitMs: PROFILE_BUSY_WAIT_MS },
 ): Promise<"free" | string> {
   const deadline = Date.now() + opts.waitMs;
-  const kill = async (pid: number): Promise<"free" | string> => {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      return `pid ${pid} could not be killed`;
-    }
-    const end = Date.now() + 5000;
+  const exitedWithin = async (pid: number, ms: number): Promise<boolean> => {
+    const end = Date.now() + ms;
     while (Date.now() < end) {
-      if (!pidAlive(pid)) {
+      if (!pidAlive(pid)) return true;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return !pidAlive(pid);
+  };
+  const kill = async (pid: number): Promise<"free" | string> => {
+    for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+      try {
+        process.kill(pid, signal);
+      } catch {
+        if (!pidAlive(pid)) break;
+        return `pid ${pid} could not be killed`;
+      }
+      if (await exitedWithin(pid, 5000)) {
         clearSingletonFiles(profileDir);
         return "free";
       }
-      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (!pidAlive(pid)) {
+      clearSingletonFiles(profileDir);
+      return "free";
     }
     return `pid ${pid} did not exit`;
   };
