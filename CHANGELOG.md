@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-03
+
+- First stable 1.0 release: 1.0.0-rc.4 plus one fix. See the release candidates below for everything new since 0.2.9.
 - Fixed recovery after a daemon crash on Linux sessions where orphans are adopted by a subreaper such as `systemd --user` rather than pid 1: the orphaned Chrome is now reclaimed instead of failing with `ProfileBusyError`.
 
 ## [1.0.0-rc.4] - 2026-10-18
