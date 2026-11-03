@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed recovery after a daemon crash on Linux sessions where orphans are adopted by a subreaper such as `systemd --user` rather than pid 1: the orphaned Chrome is now reclaimed instead of failing with `ProfileBusyError`.
+
 ## [1.0.0-rc.4] - 2026-10-18
 
 - Stopped raising and focusing the user's own Chrome window on every action in attached browsers (`--connect`). Pages dev-browser opens there get a window of their own, opened behind the user's; touched tabs get focus emulation so input, waits and `requestAnimationFrame` keep working in the background; and only a screenshot of a background tab that stalls for 2 s brings it forward. A script's own `page.bringToFront()` still does.
