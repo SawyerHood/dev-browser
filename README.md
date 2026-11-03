@@ -21,9 +21,13 @@ https://github.com/user-attachments/assets/c6cf7fb9-b1dc-46ed-93b9-6e7240990c53
 ## CLI installation
 
 ```bash
-npm install -g dev-browser
+npm install -g dev-browser@next
 dev-browser install    # only needed if dev-browser cannot find Chrome
 ```
+
+Version 1.0 is published under the `next` npm tag until it is promoted to `latest`. A plain
+`npm install -g dev-browser` still installs 0.2.x, whose CLI and page API differ from this README and the bundled skill
+(see [Upgrading to 1.0](#upgrading-to-10)).
 
 The release binary includes Bun and Puppeteer. Node is not required after installation. macOS and glibc Linux are
 supported; Windows and musl Linux are not yet supported.

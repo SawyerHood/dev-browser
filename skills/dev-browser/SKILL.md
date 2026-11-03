@@ -8,7 +8,8 @@ description: Browser automation with persistent named pages via the dev-browser 
 CLI for controlling a real Chrome with short Puppeteer scripts. One warm daemon; named pages persist between runs.
 
 ```bash
-npm install -g dev-browser   # bun add -g dev-browser works too; the first run downloads the binary if the install script was blocked
+npm install -g dev-browser@next   # this guide is for 1.0, still on the next tag; plain dev-browser installs 0.2.x
+                                  # bun add -g dev-browser@next works too; the first run downloads the binary if the install script was blocked
 dev-browser install          # only if the first run says "No Chrome found"
 ```
 
