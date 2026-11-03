@@ -518,7 +518,20 @@ export function classifyLockHolder(
   // Reparented to init (or the parent vanished): an orphan from a dead daemon.
   if (ppid === null || ppid <= 1 || !(probe.alive ?? pidAlive)(ppid)) return { kind: "orphan", pid };
   if (ppid === self) return { kind: "child", pid };
+  // Reparented to a subreaper (systemd --user, a container init, tini) rather
+  // than pid 1: the new parent is one of our own ancestors. A live daemon that
+  // launched this Chrome never is, so this Chrome is an orphan too.
+  if (isAncestorOf(ppid, self, probe.ppid ?? parentPidOf)) return { kind: "orphan", pid };
   return { kind: "foreign", pid, ppid };
+}
+
+function isAncestorOf(candidate: number, pid: number, ppidOf: (pid: number) => number | null): boolean {
+  let cur: number | null = pid;
+  for (let i = 0; i < 64 && cur !== null && cur > 1; i++) {
+    cur = ppidOf(cur);
+    if (cur === candidate) return true;
+  }
+  return false;
 }
 
 function clearSingletonFiles(profileDir: string): void {

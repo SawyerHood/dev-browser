@@ -118,7 +118,14 @@ describe("profile lock safety predicate (classifyLockHolder)", () => {
   });
 
   test("a live parent that is not us (another daemon, a manual launch) -> foreign, not killable", () => {
-    expect(classifyLockHolder(dir, new Set(), { ...probeBase, lockPid: () => 200, ppid: () => 300 })).toEqual({ kind: "foreign", pid: 200, ppid: 300 });
+    expect(classifyLockHolder(dir, new Set(), { ...probeBase, lockPid: () => 200, ppid: (p: number) => (p === 200 ? 300 : 1) })).toEqual({ kind: "foreign", pid: 200, ppid: 300 });
+  });
+
+  test("reparented to a subreaper that is also our ancestor (systemd --user) -> orphan", () => {
+    // Chrome 100's parent is 700, a subreaper above this daemon (4242 -> 700 -> 1).
+    const ppid = (p: number) => (p === 100 || p === 4242 ? 700 : p === 700 ? 1 : null);
+    const probe = { ...probeBase, alive: (p: number) => alive.has(p) || p === 700, lockPid: () => 100, ppid };
+    expect(classifyLockHolder(dir, new Set(), probe)).toEqual({ kind: "orphan", pid: 100 });
   });
 
   test("our own child that is not a live entry -> child (wait first)", () => {
