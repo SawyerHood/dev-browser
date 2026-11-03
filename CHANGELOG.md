@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-03
+
+- First stable 1.0 release, promoting 1.0.0-rc.4 unchanged. See the release candidates below for everything new since 0.2.9.
+
 ## [1.0.0-rc.4] - 2026-10-18
 
 - Stopped raising and focusing the user's own Chrome window on every action in attached browsers (`--connect`). Pages dev-browser opens there get a window of their own, opened behind the user's; touched tabs get focus emulation so input, waits and `requestAnimationFrame` keep working in the background; and only a screenshot of a background tab that stalls for 2 s brings it forward. A script's own `page.bringToFront()` still does.
