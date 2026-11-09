@@ -42,6 +42,7 @@ SANDBOX ENVIRONMENT:
     network                    Mock/intercept network requests; log request traffic
     screenshot                 Save/compare visual baselines for regression testing
     recording                  Record page interactions and generate Playwright tests
+    secrets                    Register sensitive values; redacted from console, writeFile, errors and recordings
     session                    Save/restore browser session state (cookies, localStorage, sessionStorage)
     errors                     Collect console errors, JS exceptions, and network failures per page
     audit                      Accessibility (axe-core) and performance (Core Web Vitals) audits

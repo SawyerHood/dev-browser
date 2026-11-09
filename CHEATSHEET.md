@@ -76,6 +76,7 @@ These are NOT available: `require`, `import`, `process`, `fs`, `fetch`, `__dirna
 | `network` | object | Request mocking + traffic log |
 | `screenshot` | object | Visual regression baselines |
 | `recording` | object | Record interactions → Playwright tests |
+| `secrets` | object | Register sensitive values for output redaction |
 | `session` | object | Save/restore auth state |
 | `errors` | object | Collect console errors, JS exceptions, network failures |
 | `audit` | object | Accessibility (axe-core) + Core Web Vitals |
@@ -713,6 +714,36 @@ console.log(result.filePath)      // path if outputFile was set
 console.log(JSON.stringify(result.stats))
 // stats: { actions, assertions, duration }
 ```
+
+---
+
+## `secrets` — Output Redaction
+
+Register sensitive values once per script run. The daemon then replaces them with
+`[REDACTED:NAME]` in everything that leaves the sandbox as text.
+
+```javascript
+// Value injected by the runner, never written into the script source
+await secrets.register("APP_LOGIN", globalThis.APP_LOGIN)
+
+await rPage.getByLabel("Password").fill(globalThis.APP_LOGIN)
+console.log("typed", globalThis.APP_LOGIN)   // → typed [REDACTED:APP_LOGIN]
+```
+
+| Output | Behaviour |
+|--------|-----------|
+| `console.*` | value replaced with `[REDACTED:NAME]` |
+| `writeFile(name, text)` | text replaced before writing |
+| thrown script errors | message and stack replaced, error name kept |
+| `recording.stop()` | a fill of exactly the value becomes `process.env.NAME!`; other occurrences become `[REDACTED:NAME]` |
+
+- Name must match `/^[A-Za-z_][A-Za-z0-9_]*$/`; value must be a non-empty string.
+- Registration lasts for one script run — register again at the top of every script.
+- Matches the raw value, its JSON-escaped form and its `encodeURIComponent` form.
+- Not covered: screenshots and binary `writeFile` data, transformed values (base64, substrings),
+  values the server issues (cookies, tokens in responses). `network.getLog()` and other return
+  values reach the script unredacted; redaction applies when they are printed or written.
+- Short values also redact ordinary text that happens to match them.
 
 ---
 

@@ -14,6 +14,7 @@ import * as FormManager from "../form-manager.js";
 import * as FuzzingManager from "../fuzzing-manager.js";
 import { NetworkManager } from "../network-manager.js";
 import { generateTest } from "../recording-manager.js";
+import { SecretRedactor } from "../redaction.js";
 import * as SecurityManager from "../security-manager.js";
 import * as SessionManager from "../session-manager.js";
 import {
@@ -194,6 +195,7 @@ export class QuickJSSandbox {
   readonly #anonymousPages = new Set<Page>();
   readonly #pendingHostOperations = new Set<Promise<void>>();
   readonly #transportInbox: string[] = [];
+  readonly #redactor = new SecretRedactor();
 
   #asyncError?: Error;
   #host?: QuickJSHost;
@@ -259,7 +261,10 @@ export class QuickJSSandbox {
           screenshotListBaselines: () => VisualDiffManager.listBaselines() as unknown,
           screenshotUpdateBaseline: (name, data) => VisualDiffManager.saveBaseline(name, data),
           recordingGenerateTest: (log, options) =>
-            generateTest(log, options) as unknown,
+            generateTest(log, options, this.#redactor) as unknown,
+          secretsRegister: (name, value) => {
+            this.#redactor.register(name, value);
+          },
           sessionSave: (name, options) => this.#sessionSave(name, options),
           sessionRestore: (name, options) => this.#sessionRestore(name, options),
           sessionList: (options) => SessionManager.listSessions(options),
@@ -895,6 +900,23 @@ export class QuickJSSandbox {
                 writable: false,
               });
 
+              const secretsApi = Object.create(null);
+              Object.defineProperties(secretsApi, {
+                register: {
+                  value: async (name, value) => {
+                    await hostCall("secretsRegister", JSON.stringify([name, value]));
+                  },
+                  enumerable: true,
+                },
+              });
+              Object.freeze(secretsApi);
+              Object.defineProperty(globalThis, "secrets", {
+                value: secretsApi,
+                configurable: false,
+                enumerable: true,
+                writable: false,
+              });
+
               // --- session API ---
               const sessionApi = Object.create(null);
               Object.defineProperties(sessionApi, {
@@ -1391,8 +1413,22 @@ export class QuickJSSandbox {
     }
 
     if (executionError) {
-      throw executionError;
+      throw this.#redactError(executionError);
     }
+  }
+
+  #redactError(error: unknown): unknown {
+    if (this.#redactor.isEmpty) {
+      return error;
+    }
+    if (error instanceof Error) {
+      error.message = this.#redactor.redact(error.message);
+      if (error.stack) {
+        error.stack = this.#redactor.redact(error.stack);
+      }
+      return error;
+    }
+    return typeof error === "string" ? this.#redactor.redact(error) : error;
   }
 
   async dispose(): Promise<void> {
@@ -1430,7 +1466,7 @@ export class QuickJSSandbox {
   }
 
   #routeConsole(level: QuickJSConsoleLevel, args: unknown[]): void {
-    const line = `${formatArgs(args)}\n`;
+    const line = `${this.#redactor.redact(formatArgs(args))}\n`;
     if (level === "warn" || level === "error") {
       this.#options.onStderr(line);
       return;
@@ -1525,9 +1561,10 @@ export class QuickJSSandbox {
   }
 
   async #writeTempFile(name: unknown, payload: unknown): Promise<string> {
+    const data = decodeSandboxFilePayload(payload, "File data");
     return await writeDevBrowserTempFile(
       requireString(name, "File name"),
-      decodeSandboxFilePayload(payload, "File data")
+      typeof data === "string" ? this.#redactor.redact(data) : data
     );
   }
 

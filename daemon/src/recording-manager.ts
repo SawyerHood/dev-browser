@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { SecretRedactor } from "./redaction.js";
 import { writeDevBrowserTempFile } from "./temp-files.js";
 
 type LocatorChainStep = { method: string; args: unknown[] };
@@ -43,7 +44,49 @@ export interface TestOutput {
   };
 }
 
+class EnvReference {
+  constructor(readonly name: string) {}
+}
+
+function redactNested(value: unknown, redactor: SecretRedactor): unknown {
+  if (typeof value === "string") return redactor.redact(value);
+  if (Array.isArray(value)) return value.map((item) => redactNested(item, redactor));
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redactNested(item, redactor)])
+    );
+  }
+  return value;
+}
+
+function redactArg(arg: unknown, redactor: SecretRedactor): unknown {
+  const name = redactor.nameForExactValue(arg);
+  return name === undefined ? redactNested(arg, redactor) : new EnvReference(name);
+}
+
+function redactEntry(entry: RecordingEntry, redactor: SecretRedactor): RecordingEntry {
+  const redactArgs = (args: unknown[]) => args.map((arg) => redactArg(arg, redactor));
+  switch (entry.kind) {
+    case "checkpoint":
+      return {
+        ...entry,
+        description: redactor.redact(entry.description),
+        url: redactor.redact(entry.url),
+        title: redactor.redact(entry.title),
+      };
+    case "page-action":
+      return { ...entry, args: redactArgs(entry.args) };
+    case "locator-action":
+      return {
+        ...entry,
+        args: redactArgs(entry.args),
+        chain: entry.chain.map((step) => ({ ...step, args: redactArgs(step.args) })),
+      };
+  }
+}
+
 function formatArg(arg: unknown): string {
+  if (arg instanceof EnvReference) return `process.env.${arg.name}!`;
   if (arg === null) return "null";
   if (arg === undefined) return "undefined";
   if (typeof arg === "string") return JSON.stringify(arg);
@@ -124,10 +167,18 @@ function generateActionCode(entry: RecordingEntry, indent: string): string {
   return "";
 }
 
-export async function generateTest(log: unknown, options: unknown): Promise<TestOutput> {
-  const entries = (Array.isArray(log) ? log : []) as RecordingEntry[];
+export async function generateTest(
+  log: unknown,
+  options: unknown,
+  redactor?: SecretRedactor
+): Promise<TestOutput> {
+  const recordedEntries = (Array.isArray(log) ? log : []) as RecordingEntry[];
+  const entries = redactor
+    ? recordedEntries.map((entry) => redactEntry(entry, redactor))
+    : recordedEntries;
   const opts = (options ?? {}) as RecordingOptions;
-  const testName = opts.testName ?? "Recorded test";
+  const recordedTestName = opts.testName ?? "Recorded test";
+  const testName = redactor ? redactor.redact(recordedTestName) : recordedTestName;
   const outputFile = opts.outputFile;
 
   const actionCount = entries.filter(

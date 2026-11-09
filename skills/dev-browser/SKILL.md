@@ -42,3 +42,5 @@ console.log(result.code);
 - Add `recording.checkpoint()` at key navigation steps (after login, after form submit, etc.).
 - Always pass `outputFile` to `recording.start()` so the `.spec.ts` is written to disk.
 - Choose a descriptive filename matching the flow, e.g. `checkout.spec.ts`, `auth-login.spec.ts`.
+- Register every sensitive value with `await secrets.register("NAME", value)` before using it.
+  A recorded fill of that value is then generated as `process.env.NAME!` instead of plain text.

@@ -350,6 +350,17 @@ const result = await recording.stop()
 console.log(result.code)
 ```
 
+### `secrets` — Output Redaction
+
+```javascript
+await secrets.register("APP_LOGIN", globalThis.APP_LOGIN)   // once per script run
+```
+
+Registered values are replaced with `[REDACTED:NAME]` in console output, text written via
+`writeFile`, thrown script errors and generated tests. A recorded fill of exactly the value is
+generated as `process.env.NAME!`. Screenshots and binary data are not redacted — see
+[CHEATSHEET.md](CHEATSHEET.md) for the full list of limits.
+
 ### `session` — Session Persistence
 
 Save full browser auth state (cookies + localStorage + sessionStorage) across daemon restarts.
