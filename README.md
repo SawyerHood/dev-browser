@@ -175,6 +175,14 @@ dev-browser --connect 9222 -e 'await browser.listPages()'
 dev-browser --connect 'wss://provider.example?token=…' -e 'await browser.listPages()'
 ```
 
+To attach to an already-open Chrome, enable remote debugging at `chrome://inspect/#remote-debugging`, then run
+`dev-browser --connect`. Allow Chrome's connection request when prompted. Auto-discovery first reads `DevToolsActivePort`
+in the default Chrome stable, Beta, Dev, Canary and Chromium user-data directories on macOS, Linux and Windows, in that
+order. On Linux, `CHROME_CONFIG_HOME` takes precedence over `XDG_CONFIG_HOME`, then `~/.config`; Windows uses `LOCALAPPDATA`.
+Missing, malformed or stale files are skipped. Once a file points to a listening port, a failed connection is an error;
+dev-browser does not silently attach to another browser. If no live file is found, remembered ports from `dev-browser chrome`
+are tried before ports 9222–9229. For a specific browser or a custom user-data directory, pass its explicit WebSocket URL.
+
 Attached browsers belong to the user. dev-browser extends only the tabs a script asks for and never closes the browser
 because of an idle timeout. Credentials are redacted from logs and status output, while differently authenticated
 endpoints remain separate sessions.

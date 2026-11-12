@@ -211,16 +211,17 @@ FLAGS
   Cap: after 50k chars of stdout the rest is spilled to ~/.dev-browser/v1/tmp/out-<id>.txt and at the end dev-browser prints
   `[... stdout capped at 50000 chars, N total; full output: PATH (e.g. sed -n '1,200p' PATH) ...]` then
   `[... last N chars ...]` + the tail (<= 5k). --no-cap disables. Prefer small returns, or saveFile("big.json", text).
-
 ## connect
-  --connect with no value = auto: probes ports remembered by `dev-browser chrome`, then 9222-9229 on 127.0.0.1 (400 ms each).
+  --connect = auto: first reads DevToolsActivePort in default Chrome stable/Beta/Dev/Canary/Chromium user-data directories
+  (macOS/Linux/Windows), then probes remembered `dev-browser chrome` ports and 9222-9229 on 127.0.0.1 (400 ms each).
+  Enable chrome://inspect/#remote-debugging in your open Chrome and allow its connection request. Missing/malformed/stale
+  files are skipped; a live advertised port refusing the connection is an error, never a fallback to another browser.
   --connect 9222 | --connect host:9222 | --connect http://host:9222   -> reads /json/version for the websocket URL
   --connect ws://host:9222/devtools/browser/<id> -> connects directly;  --connect unix:/path/to.sock (or pipe:NAME)
   -> raw browser-level CDP, one JSON message per line (embedder hook).
   Attached browsers are never closed by --idle-timeout; `dev-browser stop <key>` only disconnects. Named pages work the same
   (stored per endpoint; ws URL query/credentials stripped from keys/logs); the user's tabs: browser.listPages(), getPage(targetId).
   Only touched tabs are extended (`help pages`). Never raised: new pages open in a window of their own behind the user's, touched tabs get focus emulation, and only a background-tab shot stalled 2 s brings it forward (page.bringToFront() still does).
-
 ## chrome
   dev-browser chrome [--profile NAME] [--port N] [--chrome PATH] [--headless] [URL]   launch your real installed Chrome as
   a normal OS process with --remote-debugging-port on a dedicated profile (~/.dev-browser/v1/chrome-profiles/NAME, default NAME
@@ -233,7 +234,6 @@ FLAGS
   with --no-sandbox (remembered in launch-state.json). --headless passes --headless=new (CI/tests).
   `dev-browser chrome --list` prints detected Chromes. (Chrome 136+ ignores the port flag on its default profile, hence the
   dedicated --user-data-dir.) A --connect that finds nothing prints this launch hint.
-
 ## config
   ~/.dev-browser/v1/config.json: { "headless": false, "idleTimeout": "30m", "chrome": "/path/to/chrome", "timeout": 30, "ignoreHttpsErrors": false }
   Precedence everywhere: flag > env > config.json > default. Env: DEV_BROWSER_HOME (state dir, default ~/.dev-browser/v1:

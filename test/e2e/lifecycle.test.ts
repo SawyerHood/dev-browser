@@ -529,13 +529,8 @@ describe("--connect to an existing Chrome", () => {
     expect(urls.filter((u) => u === srv.url("/")).length).toBe(2);
   });
 
-  test("--connect auto finds it via the remembered chrome-ports.json", async () => {
-    fs.writeFileSync(path.join(cli.home, "chrome-ports.json"), JSON.stringify({ t: { port, pid: 0, profile: "x", at: Date.now() } }));
-    const r = await cli.run(["--connect", "-e", `const p = await browser.getPage("x"); await p.title()`]);
-    expect(r).toEqual({ code: 0, stdout: "Life\n", stderr: "" });
-    const b = await cli.run(["browsers"]);
-    expect(b.stdout.trim().split("\n").length).toBe(1);
-  });
+  // Auto-discovery (including remembered ports) is covered by cdp-source.test.ts with injected lookup roots.
+  // A bare --connect here could select the developer's real Chrome ahead of this test's disposable browser.
 
   test("dev-browser pages --connect lists the external Chrome's tabs", async () => {
     const r = await cli.run(["pages", "--connect", String(port)]);

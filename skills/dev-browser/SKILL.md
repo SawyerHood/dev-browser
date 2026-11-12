@@ -27,3 +27,9 @@ Gotchas: end lines with semicolons (a line starting with `(` continues the previ
 `({ a, b })`; `page.click` never waits (use `waitForSelector` first); page names are per browser (`--headless` and
 headed are separate Chromes and profiles); refs reset on navigation — re-snapshot; file paths resolve against your cwd
 (uploadFile, screenshot/pdf `path`); do not run parallel dev-browser calls against the same named page.
+
+To attach to an already-open Chrome, enable `chrome://inspect/#remote-debugging`, then use `dev-browser --connect`
+and allow Chrome's connection request. Auto-discovery reads `DevToolsActivePort` in default Chrome stable/Beta/Dev/Canary/
+Chromium user-data directories first, then remembered ports and 9222–9229. Missing/malformed/stale files are skipped;
+a live advertised endpoint refusing the connection is an error, never a fallback to another browser. Pass an explicit
+WebSocket URL to select a specific browser or one with a custom user-data directory.
