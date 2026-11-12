@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed another client killing a healthy daemon: a CLI call that arrived while a run was in a synchronous busy loop of more than 5 s treated the delayed handshake as a hung daemon and SIGKILLed it, ending every run in it. Clients now wait up to 30 s for the handshake and fail with "the request was not sent" instead of killing. A run whose own deadline passes still restarts a hung daemon, and a bare `dev-browser stop` still kills one that does not answer. Requests are sent only after the daemon's hello, so a client that gives up never leaves a request that runs later.
+
 ## [1.0.0] - 2026-11-03
 
 - First stable 1.0 release: 1.0.0-rc.4 plus one fix. See the release candidates below for everything new since 0.2.9.

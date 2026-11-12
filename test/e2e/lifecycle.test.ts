@@ -336,6 +336,20 @@ describe("hung scripts", () => {
     expect(s.stdout).toContain("runs     0 active");
   });
 
+  test("another client waits out a finite busy loop instead of killing the daemon", async () => {
+    await cli.run([...H, "-e", "'warm'"]);
+    const pid = Number(fs.readFileSync(path.join(cli.home, "daemon.pid"), "utf8"));
+    const busy = cli.run([...H, "--timeout", "30", "-e", "const t = Date.now(); while (Date.now() - t < 7000) {} 'spun'"], {
+      timeoutMs: 40_000,
+    });
+    await sleep(1000);
+    const status = await cli.run(["status"], { timeoutMs: 40_000 });
+    expect(status.code).toBe(0);
+    expect(status.stderr).not.toMatch(/unresponsive/);
+    expect(await busy).toEqual({ code: 0, stdout: "spun\n", stderr: "" });
+    expect(Number(fs.readFileSync(path.join(cli.home, "daemon.pid"), "utf8"))).toBe(pid);
+  }, 45_000);
+
   test("an infinite loop: the client watchdog kills the hung daemon; the next call restarts it", async () => {
     const pid = Number(fs.readFileSync(path.join(cli.home, "daemon.pid"), "utf8"));
     const t0 = Date.now();

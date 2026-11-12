@@ -78,7 +78,7 @@ FLAGS
   `TimeoutError: Timed out after 30s (deadline)` (+ ` while in page.waitForSelector("#x")` when a call was in flight).
   After the deadline the script is a zombie: its next page/handle/frame call rejects (`script deadline passed`), its
   timers and listeners are cleared. The deadline fires between awaits only: synchronous CPU-bound code (a busy loop)
-  cannot be interrupted; an infinite one is ended by the client watchdog, which restarts the daemon and its launched
+  cannot be interrupted; an infinite one is ended by its own client's watchdog, which restarts the daemon and its launched
   Chrome (named pages lost). Inside the script, waitFor*/locator/goto calls default to 5 s (navigation 15 s); override
   per call with { timeout }. setDefaultTimeout/setDefaultNavigationTimeout/setRequestInterception(true) are undone when
   the script ends. Scripts run concurrently; only launch/connect, page creation and input on different tabs of one
