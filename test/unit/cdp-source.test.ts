@@ -103,6 +103,18 @@ describe("default Chrome user-data directories", () => {
 });
 
 describe("DevToolsActivePort discovery", () => {
+  test("a live remembered port keeps priority over an advertised browser", async () => {
+    const remembered = endpoint({ version: true });
+    const advertised = endpoint();
+    const root = activePort("chrome", `${advertised.port}\n${advertised.browserPath}`);
+    fs.writeFileSync(path.join(dir, "chrome-ports.json"), JSON.stringify({ test: { port: remembered.port } }));
+    const { browser, resolved } = await connectCdp({ kind: "cdp", url: "auto" }, log, { userDataDirs: [root], ports: [] });
+    cleanup.push(() => browser.disconnect());
+    expect(resolved.wsEndpoint).toBe(remembered.ws);
+    expect(await browser.version()).toBe("Chrome/157.0.0.0");
+    expect(advertised.requests).toEqual([]);
+  });
+
   test("falls back to a remembered port before the fixed port range when no file is present", async () => {
     const remembered = endpoint({ version: true });
     const fallback = endpoint({ version: true });

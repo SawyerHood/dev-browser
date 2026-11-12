@@ -1,7 +1,7 @@
 /**
  * CDP source: attach to a running Chrome.
  *
- *   --connect                -> "auto": Chrome's DevToolsActivePort, then remembered ports and 9222-9229
+ *   --connect                -> "auto": remembered ports, Chrome's DevToolsActivePort, then 9222-9229
  *   --connect http://h:p     -> GET /json/version, use webSocketDebuggerUrl
  *   --connect ws://...       -> connect directly
  */
@@ -153,6 +153,17 @@ function rememberedPorts(): number[] {
   }
 }
 
+async function probePorts(ports: readonly number[], log: FileLogger): Promise<ResolvedCdp | null> {
+  const results = await Promise.all(ports.map(async (port) => {
+    const v = await fetchVersion(`http://127.0.0.1:${port}`, PROBE_TIMEOUT_MS);
+    return v?.webSocketDebuggerUrl ? { port, ws: v.webSocketDebuggerUrl } : null;
+  }));
+  const hit = results.find((r) => r !== null);
+  if (!hit) return null;
+  log.info(`cdp auto-discovered Chrome on port ${hit.port}`);
+  return { wsEndpoint: hit.ws, requested: "auto" };
+}
+
 export function chromeLaunchHint(): string {
   return (
     "To attach to your existing Chrome session, enable remote debugging at chrome://inspect/#remote-debugging, then retry --connect.\n" +
@@ -166,24 +177,22 @@ export function chromeLaunchHint(): string {
 /** Resolve a requested endpoint to a browser websocket URL. */
 export async function resolveCdpEndpoint(url: string, log: FileLogger, discovery: CdpDiscoveryOptions = {}): Promise<ResolvedCdp> {
   if (url === "auto" || url === "") {
+    // Preserve the priority of a browser deliberately launched with `dev-browser chrome`.
+    const remembered = [...new Set(rememberedPorts())];
+    const known = await probePorts(remembered, log);
+    if (known) return known;
     // chrome://inspect endpoints may return 404 for /json/version. Use the
-    // browser websocket Chrome wrote to disk before probing HTTP endpoints.
+    // browser websocket Chrome wrote to disk before probing the fixed port range.
     const advertised = await advertisedEndpoint(discovery.userDataDirs ?? defaultChromeUserDataDirs(), log);
     if (advertised) return advertised;
-    const ports = [...new Set([...rememberedPorts(), ...(discovery.ports ?? AUTO_PORTS)])];
-    const probes = ports.map(async (port) => {
-      const v = await fetchVersion(`http://127.0.0.1:${port}`, PROBE_TIMEOUT_MS);
-      return v?.webSocketDebuggerUrl ? { port, ws: v.webSocketDebuggerUrl } : null;
-    });
-    const results = await Promise.all(probes);
-    const hit = results.find((r) => r !== null);
+    const ports = [...new Set(discovery.ports ?? AUTO_PORTS)].filter((port) => !remembered.includes(port));
+    const hit = await probePorts(ports, log);
     if (!hit) {
       throw new CdpConnectError(
-        `No Chrome with remote debugging found in default user-data directories or on ports ${ports.join(", ")}.\n` + chromeLaunchHint(),
+        `No Chrome with remote debugging found in default user-data directories or on ports ${[...remembered, ...ports].join(", ")}.\n` + chromeLaunchHint(),
       );
     }
-    log.info(`cdp auto-discovered Chrome on port ${hit.port}`);
-    return { wsEndpoint: hit.ws, requested: "auto" };
+    return hit;
   }
   if (/^wss?:\/\//i.test(url)) return { wsEndpoint: url, requested: url };
   if (/^https?:\/\//i.test(url)) {

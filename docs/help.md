@@ -212,8 +212,8 @@ FLAGS
   `[... stdout capped at 50000 chars, N total; full output: PATH (e.g. sed -n '1,200p' PATH) ...]` then
   `[... last N chars ...]` + the tail (<= 5k). --no-cap disables. Prefer small returns, or saveFile("big.json", text).
 ## connect
-  --connect = auto: first reads DevToolsActivePort in default Chrome stable/Beta/Dev/Canary/Chromium user-data directories
-  (macOS/Linux/Windows), then probes remembered `dev-browser chrome` ports and 9222-9229 on 127.0.0.1 (400 ms each).
+  --connect = auto: probes remembered `dev-browser chrome` ports first, then reads DevToolsActivePort in default Chrome
+  stable/Beta/Dev/Canary/Chromium user-data directories (macOS/Linux/Windows), then ports 9222-9229 (127.0.0.1, 400 ms each).
   Enable chrome://inspect/#remote-debugging in your open Chrome and allow its connection request. Missing/malformed/stale
   files are skipped; a live advertised port refusing the connection is an error, never a fallback to another browser.
   --connect 9222 | --connect host:9222 | --connect http://host:9222   -> reads /json/version for the websocket URL
