@@ -21,8 +21,14 @@ import { err as writeErr } from "./io.ts";
 const SPAWN_POLL_MS = 20;
 const SPAWN_WAIT_MS = 10_000;
 const LOCK_STALE_MS = 15_000;
-/** A healthy daemon answers hello in microseconds; beyond this it is hung. */
-const HELLO_TIMEOUT_MS = 5_000;
+/**
+ * A healthy daemon answers hello in microseconds, but only once its event loop is free: another run's synchronous
+ * code (a finite busy loop) delays every handshake until it yields. A run that never yields is ended by its own
+ * client's deadline watchdog (`killOnIdle`), so other clients only wait, then give up without killing anything.
+ */
+const HELLO_TIMEOUT_MS = 30_000;
+/** `stop` is the explicit way out of a daemon that does not answer: it waits less and kills it. */
+const STOP_HELLO_TIMEOUT_MS = 5_000;
 
 export class DaemonHungError extends Error {
   constructor() {
@@ -312,19 +318,30 @@ export interface SendOptions {
 /**
  * Send one request and stream frames. Handles version mismatch by asking the
  * old daemon to exit and retrying once against a fresh daemon. A daemon that
- * does not answer the handshake is killed and restarted once.
+ * does not answer the handshake is killed and restarted only by a bare `stop`:
+ * any other client may just be waiting behind another run's synchronous code,
+ * and killing the daemon would end every run in it.
  */
 export async function sendRequest(req: Request, opts: SendOptions): Promise<void> {
+  const stopAll = req.type === "stop" && !req.browser;
+  const helloTimeoutMs = opts.firstFrameTimeoutMs ?? (stopAll ? STOP_HELLO_TIMEOUT_MS : HELLO_TIMEOUT_MS);
+  const talkOpts: SendOptions = { ...opts, firstFrameTimeoutMs: helloTimeoutMs };
   for (let attempt = 0; attempt < 2; attempt++) {
     const conn = await ensureDaemon();
     let outcome: "ok" | "retry";
     try {
-      outcome = await talk(conn, req, opts);
+      outcome = await talk(conn, req, talkOpts);
     } catch (err) {
-      if (err instanceof DaemonHungError && attempt === 0) {
-        writeErr("dev-browser: daemon unresponsive, restarting it\n");
+      if (err instanceof DaemonHungError && stopAll && attempt === 0) {
+        writeErr("dev-browser: daemon unresponsive, killing it\n");
         killDaemon();
         continue;
+      }
+      if (err instanceof DaemonHungError) {
+        throw new Error(
+          `daemon did not answer for ${Math.round(helloTimeoutMs / 1000)}s (a running script may be blocking it); ` +
+            "the request was not sent. Retry, or run `dev-browser stop` if it stays unresponsive.",
+        );
       }
       throw err;
     }
@@ -383,6 +400,9 @@ function talk(conn: Conn, req: Request, opts: SendOptions): Promise<"ok" | "retr
             return;
           }
           resetTimer(opts.idleTimeoutMs);
+          // Send the request only now: a client that gives up on the handshake has sent nothing that could
+          // still run once the daemon is free again.
+          conn.write(encodeFrame(req));
           continue;
         }
         if (f.type === "error" && f.kind === "version") {
@@ -419,6 +439,6 @@ function talk(conn: Conn, req: Request, opts: SendOptions): Promise<"ok" | "retr
       resolve("ok");
     });
     resetTimer(opts.firstFrameTimeoutMs ?? HELLO_TIMEOUT_MS);
-    conn.write(encodeFrame({ type: "hello", version: VERSION, protocol: PROTOCOL_VERSION }) + encodeFrame(req));
+    conn.write(encodeFrame({ type: "hello", version: VERSION, protocol: PROTOCOL_VERSION }));
   });
 }
