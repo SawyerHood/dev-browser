@@ -1,11 +1,14 @@
 /**
  * CDP source: attach to a running Chrome.
  *
- *   --connect                -> "auto": ports remembered by `dev-browser chrome`, then 9222-9229
+ *   --connect                -> "auto": remembered ports, Chrome's DevToolsActivePort, then 9222-9229
  *   --connect http://h:p     -> GET /json/version, use webSocketDebuggerUrl
  *   --connect ws://...       -> connect directly
  */
 import * as fs from "node:fs";
+import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 import puppeteer, { type Browser } from "puppeteer-core";
 import type { CdpSource } from "../../shared/protocol.ts";
 import { paths } from "../../shared/paths.ts";
@@ -40,6 +43,88 @@ export interface ResolvedCdp {
   wsEndpoint: string;
   /** What the user asked for; "auto" or the original URL. */
   requested: string;
+  /** Present when auto-discovery selected Chrome's advertised browser endpoint. */
+  discoveryFile?: string;
+}
+
+/** Lookup inputs are injectable so tests never probe the user's Chrome. */
+export interface CdpDiscoveryOptions {
+  userDataDirs?: readonly string[];
+  /** Override the fixed probe range; remembered ports still come first. */
+  ports?: readonly number[];
+}
+
+/** Chromium's documented default user-data roots, in channel preference order. */
+export function defaultChromeUserDataDirs(
+  platform: NodeJS.Platform = process.platform,
+  homeDir = os.homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (platform === "darwin") {
+    const base = path.posix.join(homeDir, "Library/Application Support");
+    return ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome Canary", "Chromium"]
+      .map((dir) => path.posix.join(base, dir));
+  }
+  if (platform === "linux") {
+    const base = [env.CHROME_CONFIG_HOME, env.XDG_CONFIG_HOME].find((dir) => dir && path.posix.isAbsolute(dir))
+      ?? path.posix.join(homeDir, ".config");
+    return ["google-chrome", "google-chrome-beta", "google-chrome-unstable", "google-chrome-canary", "chromium"]
+      .map((dir) => path.posix.join(base, dir));
+  }
+  if (platform === "win32") {
+    const base = env.LOCALAPPDATA && path.win32.isAbsolute(env.LOCALAPPDATA)
+      ? env.LOCALAPPDATA : path.win32.join(homeDir, "AppData/Local");
+    return ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome SxS", "Chromium"]
+      .map((dir) => path.win32.join(base, dir, "User Data"));
+  }
+  return [];
+}
+
+/** Only a refused TCP connection establishes a stale advertised endpoint. */
+function portListening(port: number): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    const finish = (err: Error | null, listening = false) => {
+      socket.destroy();
+      if (err) reject(err);
+      else resolve(listening);
+    };
+    socket.setTimeout(PROBE_TIMEOUT_MS, () => finish(new Error(`Timed out checking port ${port}`)));
+    socket.once("connect", () => finish(null, true));
+    socket.once("error", (err: NodeJS.ErrnoException) => finish(err.code === "ECONNREFUSED" ? null : err));
+  });
+}
+
+async function advertisedEndpoint(dirs: readonly string[], log: FileLogger): Promise<ResolvedCdp | null> {
+  for (const dir of dirs) {
+    const file = path.join(dir, "DevToolsActivePort");
+    let contents: string;
+    try {
+      contents = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    const [portText, wsPath, extra] = contents.trim().split(/\r?\n/);
+    const port = Number(portText);
+    if (!/^\d+$/.test(portText ?? "") || port < 1 || port > 65535 || extra !== undefined ||
+        !/^\/devtools\/browser\/[^\s/?#\\]+$/.test(wsPath ?? "")) {
+      log.warn(`ignoring malformed ${file}`);
+      continue;
+    }
+    let listening: boolean;
+    try {
+      listening = await portListening(port);
+    } catch (err) {
+      throw new CdpConnectError(`Could not check Chrome advertised by ${file}: ${(err as Error).message}. Not probing another browser.`);
+    }
+    if (!listening) {
+      log.info(`ignoring stale ${file}: nothing listens on port ${port}`);
+      continue;
+    }
+    log.info(`cdp auto-discovered Chrome via ${file}`);
+    return { wsEndpoint: `ws://127.0.0.1:${port}${wsPath}`, requested: "auto", discoveryFile: file };
+  }
+  return null;
 }
 
 async function fetchVersion(httpBase: string, timeoutMs: number): Promise<{ webSocketDebuggerUrl?: string } | null> {
@@ -68,8 +153,20 @@ function rememberedPorts(): number[] {
   }
 }
 
+async function probePorts(ports: readonly number[], log: FileLogger): Promise<ResolvedCdp | null> {
+  const results = await Promise.all(ports.map(async (port) => {
+    const v = await fetchVersion(`http://127.0.0.1:${port}`, PROBE_TIMEOUT_MS);
+    return v?.webSocketDebuggerUrl ? { port, ws: v.webSocketDebuggerUrl } : null;
+  }));
+  const hit = results.find((r) => r !== null);
+  if (!hit) return null;
+  log.info(`cdp auto-discovered Chrome on port ${hit.port}`);
+  return { wsEndpoint: hit.ws, requested: "auto" };
+}
+
 export function chromeLaunchHint(): string {
   return (
+    "To attach to your existing Chrome session, enable remote debugging at chrome://inspect/#remote-debugging, then retry --connect.\n" +
     "Start Chrome with remote debugging, for example `dev-browser chrome` (recommended), or\n" +
     "  macOS:  open -a 'Google Chrome' --args --remote-debugging-port=9222 --user-data-dir=$HOME/.dev-browser/v1/browsers/manual\n" +
     "  Linux:  google-chrome --remote-debugging-port=9222 --user-data-dir=$HOME/.dev-browser/v1/browsers/manual\n" +
@@ -78,22 +175,24 @@ export function chromeLaunchHint(): string {
 }
 
 /** Resolve a requested endpoint to a browser websocket URL. */
-export async function resolveCdpEndpoint(url: string, log: FileLogger): Promise<ResolvedCdp> {
+export async function resolveCdpEndpoint(url: string, log: FileLogger, discovery: CdpDiscoveryOptions = {}): Promise<ResolvedCdp> {
   if (url === "auto" || url === "") {
-    const ports = [...new Set([...rememberedPorts(), ...AUTO_PORTS])];
-    const probes = ports.map(async (port) => {
-      const v = await fetchVersion(`http://127.0.0.1:${port}`, PROBE_TIMEOUT_MS);
-      return v?.webSocketDebuggerUrl ? { port, ws: v.webSocketDebuggerUrl } : null;
-    });
-    const results = await Promise.all(probes);
-    const hit = results.find((r) => r !== null);
+    // Preserve the priority of a browser deliberately launched with `dev-browser chrome`.
+    const remembered = [...new Set(rememberedPorts())];
+    const known = await probePorts(remembered, log);
+    if (known) return known;
+    // chrome://inspect endpoints may return 404 for /json/version. Use the
+    // browser websocket Chrome wrote to disk before probing the fixed port range.
+    const advertised = await advertisedEndpoint(discovery.userDataDirs ?? defaultChromeUserDataDirs(), log);
+    if (advertised) return advertised;
+    const ports = [...new Set(discovery.ports ?? AUTO_PORTS)].filter((port) => !remembered.includes(port));
+    const hit = await probePorts(ports, log);
     if (!hit) {
       throw new CdpConnectError(
-        `No Chrome with remote debugging found on ports ${ports.join(", ")}.\n` + chromeLaunchHint(),
+        `No Chrome with remote debugging found in default user-data directories or on ports ${[...remembered, ...ports].join(", ")}.\n` + chromeLaunchHint(),
       );
     }
-    log.info(`cdp auto-discovered Chrome on port ${hit.port}`);
-    return { wsEndpoint: hit.ws, requested: "auto" };
+    return hit;
   }
   if (/^wss?:\/\//i.test(url)) return { wsEndpoint: url, requested: url };
   if (/^https?:\/\//i.test(url)) {
@@ -108,15 +207,24 @@ export async function resolveCdpEndpoint(url: string, log: FileLogger): Promise<
   throw new CdpConnectError(`Unrecognized --connect value "${url}". Use auto, http://host:port, or ws://...`);
 }
 
-export async function connectCdp(spec: CdpSource, log: FileLogger): Promise<{ browser: Browser; resolved: ResolvedCdp }> {
-  const resolved = await resolveCdpEndpoint(spec.url, log);
+export async function connectCdp(spec: CdpSource, log: FileLogger, discovery: CdpDiscoveryOptions = {}): Promise<{ browser: Browser; resolved: ResolvedCdp }> {
+  const resolved = await resolveCdpEndpoint(spec.url, log, discovery);
   const t0 = Date.now();
-  const browser = await puppeteer.connect({
-    browserWSEndpoint: resolved.wsEndpoint,
-    defaultViewport: null,
-    protocolTimeout: PROTOCOL_TIMEOUT_MS,
-    acceptInsecureCerts: spec.ignoreHTTPSErrors === true,
-  });
+  let browser: Browser;
+  try {
+    browser = await puppeteer.connect({
+      browserWSEndpoint: resolved.wsEndpoint,
+      defaultViewport: null,
+      protocolTimeout: PROTOCOL_TIMEOUT_MS,
+      acceptInsecureCerts: spec.ignoreHTTPSErrors === true,
+    });
+  } catch (err) {
+    if (!resolved.discoveryFile) throw err;
+    throw new CdpConnectError(
+      `Chrome advertised by ${resolved.discoveryFile} did not accept the DevTools connection: ${(err as Error).message}\n` +
+      "If Chrome's remote debugging request was denied or timed out, retry when ready to allow it. Not connecting to another browser.",
+    );
+  }
   log.info(`connected to ${redactEndpoint(resolved.wsEndpoint)} in ${Date.now() - t0}ms`);
   return { browser, resolved };
 }
