@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Added `--connect` discovery through Chrome’s `DevToolsActivePort` in default user-data directories, including browsers enabled through `chrome://inspect/#remote-debugging` without `/json/version`. A live advertised endpoint that refuses the connection is reported instead of falling back to a different browser.
+
 ## [1.0.0] - 2026-11-03
 
 - First stable 1.0 release: 1.0.0-rc.4 plus one fix. See the release candidates below for everything new since 0.2.9.
