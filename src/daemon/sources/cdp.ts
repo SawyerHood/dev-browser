@@ -54,7 +54,10 @@ export interface CdpDiscoveryOptions {
   ports?: readonly number[];
 }
 
-/** Chromium's documented default user-data roots, in channel preference order. */
+/** Brave's default user-data directory: under Chrome's root on macOS and Windows; see the Linux branch. */
+const BRAVE = "BraveSoftware/Brave-Browser";
+
+/** Default user-data roots: Chrome's channels in preference order, then Chromium, then Brave. */
 export function defaultChromeUserDataDirs(
   platform: NodeJS.Platform = process.platform,
   homeDir = os.homedir(),
@@ -62,19 +65,22 @@ export function defaultChromeUserDataDirs(
 ): string[] {
   if (platform === "darwin") {
     const base = path.posix.join(homeDir, "Library/Application Support");
-    return ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome Canary", "Chromium"]
+    return ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome Canary", "Chromium", BRAVE]
       .map((dir) => path.posix.join(base, dir));
   }
   if (platform === "linux") {
-    const base = [env.CHROME_CONFIG_HOME, env.XDG_CONFIG_HOME].find((dir) => dir && path.posix.isAbsolute(dir))
-      ?? path.posix.join(homeDir, ".config");
+    const absolute = (dir: string | undefined) => (dir && path.posix.isAbsolute(dir) ? dir : undefined);
+    const xdg = absolute(env.XDG_CONFIG_HOME) ?? path.posix.join(homeDir, ".config");
+    const base = absolute(env.CHROME_CONFIG_HOME) ?? xdg;
     return ["google-chrome", "google-chrome-beta", "google-chrome-unstable", "google-chrome-canary", "chromium"]
-      .map((dir) => path.posix.join(base, dir));
+      .map((dir) => path.posix.join(base, dir))
+      // Brave ignores CHROME_CONFIG_HOME (brave-core chromium_src/chrome/common/chrome_paths_linux.cc).
+      .concat(path.posix.join(xdg, BRAVE));
   }
   if (platform === "win32") {
     const base = env.LOCALAPPDATA && path.win32.isAbsolute(env.LOCALAPPDATA)
       ? env.LOCALAPPDATA : path.win32.join(homeDir, "AppData/Local");
-    return ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome SxS", "Chromium"]
+    return ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome SxS", "Chromium", BRAVE]
       .map((dir) => path.win32.join(base, dir, "User Data"));
   }
   return [];

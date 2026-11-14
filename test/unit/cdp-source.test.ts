@@ -73,29 +73,35 @@ function activePort(name: string, contents: string): string {
 }
 
 describe("default Chrome user-data directories", () => {
-  test("macOS includes stable, beta, dev, canary and Chromium", () => {
+  test("macOS includes stable, beta, dev, canary, Chromium and Brave", () => {
     expect(defaultChromeUserDataDirs("darwin", "/fixture", {})).toEqual([
       "/fixture/Library/Application Support/Google/Chrome",
       "/fixture/Library/Application Support/Google/Chrome Beta",
       "/fixture/Library/Application Support/Google/Chrome Dev",
       "/fixture/Library/Application Support/Google/Chrome Canary",
       "/fixture/Library/Application Support/Chromium",
+      "/fixture/Library/Application Support/BraveSoftware/Brave-Browser",
     ]);
   });
   test("Linux honors config roots and uses the unstable directory for Dev", () => {
-    const expected = ["google-chrome", "google-chrome-beta", "google-chrome-unstable", "google-chrome-canary", "chromium"];
-    expect(defaultChromeUserDataDirs("linux", "/fixture", {})).toEqual(expected.map((p) => `/fixture/.config/${p}`));
-    expect(defaultChromeUserDataDirs("linux", "/fixture", { XDG_CONFIG_HOME: "/xdg" })).toEqual(expected.map((p) => `/xdg/${p}`));
+    const chrome = ["google-chrome", "google-chrome-beta", "google-chrome-unstable", "google-chrome-canary", "chromium"];
+    const brave = "BraveSoftware/Brave-Browser";
+    const expected = (root: string, braveRoot = root) => [...chrome.map((p) => `${root}/${p}`), `${braveRoot}/${brave}`];
+    expect(defaultChromeUserDataDirs("linux", "/fixture", {})).toEqual(expected("/fixture/.config"));
+    expect(defaultChromeUserDataDirs("linux", "/fixture", { XDG_CONFIG_HOME: "/xdg" })).toEqual(expected("/xdg"));
+    // Brave ignores CHROME_CONFIG_HOME.
     expect(defaultChromeUserDataDirs("linux", "/fixture", { CHROME_CONFIG_HOME: "/chrome", XDG_CONFIG_HOME: "/xdg" }))
-      .toEqual(expected.map((p) => `/chrome/${p}`));
+      .toEqual(expected("/chrome", "/xdg"));
+    expect(defaultChromeUserDataDirs("linux", "/fixture", { CHROME_CONFIG_HOME: "/chrome" }))
+      .toEqual(expected("/chrome", "/fixture/.config"));
     expect(defaultChromeUserDataDirs("linux", "/fixture", { CHROME_CONFIG_HOME: "relative", XDG_CONFIG_HOME: "relative" }))
-      .toEqual(expected.map((p) => `/fixture/.config/${p}`));
+      .toEqual(expected("/fixture/.config"));
   });
   test("Windows uses LOCALAPPDATA and the Canary SxS directory", () => {
     expect(defaultChromeUserDataDirs("win32", "C:\\Fixture", { LOCALAPPDATA: "D:\\Local" })).toEqual([
       "D:\\Local\\Google\\Chrome\\User Data", "D:\\Local\\Google\\Chrome Beta\\User Data",
       "D:\\Local\\Google\\Chrome Dev\\User Data", "D:\\Local\\Google\\Chrome SxS\\User Data",
-      "D:\\Local\\Chromium\\User Data",
+      "D:\\Local\\Chromium\\User Data", "D:\\Local\\BraveSoftware\\Brave-Browser\\User Data",
     ]);
     expect(defaultChromeUserDataDirs("win32", "C:\\Fixture", {})[0]).toBe("C:\\Fixture\\AppData\\Local\\Google\\Chrome\\User Data");
     expect(defaultChromeUserDataDirs("freebsd", "/fixture", {})).toEqual([]);
