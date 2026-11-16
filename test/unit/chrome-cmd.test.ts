@@ -11,7 +11,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { findChrome } from "../../src/shared/chrome.ts";
-import { makeCliEnv, type CliEnv } from "../helpers/cli.ts";
+import { makeCliEnv, removeDir, type CliEnv } from "../helpers/cli.ts";
 
 let home: string;
 let prevHome: string | undefined;
@@ -54,7 +54,7 @@ beforeAll(() => {
 afterAll(async () => {
   if (prevHome === undefined) delete process.env.DEV_BROWSER_HOME;
   else process.env.DEV_BROWSER_HOME = prevHome;
-  fs.rmSync(home, { recursive: true, force: true });
+  await removeDir(home);
   await cli.cleanup();
 });
 
@@ -88,7 +88,8 @@ setTimeout(() => process.exit(0), 20000);
 }
 
 describe("dev-browser chrome verifies the launch", () => {
-  test("a Chrome that exits immediately: exit 1, stderr tail shown, no port recorded", async () => {
+  // The fake Chrome is a #!/bin/sh script, which Windows cannot exec.
+  test.skipIf(process.platform === "win32")("a Chrome that exits immediately: exit 1, stderr tail shown, no port recorded", async () => {
     const exe = fakeChromeDies("chrome-dies", "Missing X server or DISPLAY", 1);
     const port = await freePort();
     const r = await chrome(["--chrome", exe, "--port", String(port)]);

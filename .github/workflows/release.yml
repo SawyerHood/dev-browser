@@ -36,7 +36,7 @@ jobs:
       - name: Build all targets
         run: |
           bun run scripts/build.ts daemon
-          for t in bun-linux-x64 bun-linux-arm64 bun-darwin-arm64 bun-darwin-x64; do
+          for t in bun-linux-x64 bun-linux-arm64 bun-darwin-arm64 bun-darwin-x64 bun-windows-x64; do
             name=$(echo $t | sed 's/^bun-//')
             bun run scripts/build.ts all --target $t --outfile dist/dev-browser-$name
           done

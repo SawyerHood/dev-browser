@@ -25,8 +25,9 @@ npm install -g dev-browser
 dev-browser install    # only needed if dev-browser cannot find Chrome
 ```
 
-The release binary includes Bun and Puppeteer. Node is not required after installation. macOS and glibc Linux are
-supported; Windows and musl Linux are not yet supported.
+The release binary includes Bun and Puppeteer. Node is not required after installation. macOS, glibc Linux and
+Windows x64 are supported; musl Linux is not yet supported. On Windows, run `dev-browser stop` before upgrading: a
+running daemon keeps the binary in use.
 
 Snap-packaged Chromium cannot read the default `~/.dev-browser/v1` directory. On Ubuntu, use `dev-browser install`
 or point `DEV_BROWSER_CHROME` at another Chrome binary.

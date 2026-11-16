@@ -14,8 +14,9 @@ import {
   type HelloFromDaemon,
   type Request,
 } from "../shared/protocol.ts";
-import { paths, ensureHome, lazyFs } from "../shared/paths.ts";
+import { paths, ensureHome, lazyFs, resolvePath } from "../shared/paths.ts";
 import { VERSION } from "../shared/version.ts";
+import { dropHandleInheritance } from "../shared/win32.ts";
 import { err as writeErr } from "./io.ts";
 
 const SPAWN_POLL_MS = 20;
@@ -63,8 +64,9 @@ export function killDaemon(): boolean {
   return killed;
 }
 
+/** The compiled binary's embedded fs is /$bunfs/, or B:/~BUN/ on Windows. */
 export function isCompiled(): boolean {
-  return typeof Bun !== "undefined" && typeof Bun.main === "string" && Bun.main.startsWith("/$bunfs/");
+  return typeof Bun !== "undefined" && typeof Bun.main === "string" && /^(\/\$bunfs\/|B:[\\/]~BUN[\\/])/.test(Bun.main);
 }
 
 /* ------------------------------------------------------------------ */
@@ -245,7 +247,17 @@ export function spawnDaemon(): void {
   const args = isCompiled() ? [process.execPath, "daemon"] : [process.execPath, Bun.main, "daemon"];
   const env: Record<string, string | undefined> = { ...process.env };
   delete env.NODE_PATH; // never let a host app's module paths leak into the daemon
+  // Windows cannot delete or rename a directory while it is a running process's cwd, so the
+  // daemon leaves the caller's directory there (and gets the paths in its environment resolved).
+  const cwd = process.platform === "win32" ? process.env.SystemRoot : undefined;
+  if (cwd) {
+    for (const key of ["DEV_BROWSER_HOME", "DEV_BROWSER_SOCKET", "DEV_BROWSER_CHROME"]) {
+      if (env[key]) env[key] = resolvePath(env[key]);
+    }
+  }
+  dropHandleInheritance();
   const child = Bun.spawn(args, {
+    cwd,
     stdio: ["ignore", logFd, logFd],
     env: env as Record<string, string>,
     // Own session so the daemon survives this client and its terminal.

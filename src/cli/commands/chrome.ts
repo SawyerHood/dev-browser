@@ -19,6 +19,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { listChromeCandidates, type ChromeCandidate } from "../../shared/chrome.ts";
 import { paths, ensureHome } from "../../shared/paths.ts";
 import { EXIT_ERROR, EXIT_OK, EXIT_USAGE } from "../../shared/protocol.ts";
+import { dropHandleInheritance } from "../../shared/win32.ts";
 import { needsNoSandbox, rememberNoSandbox, isSandboxError } from "../../daemon/sources/launch.ts";
 
 /** How long to wait for Chrome to answer /json/version before giving up. */
@@ -78,6 +79,7 @@ export async function spawnAndVerify(
   const errFd = fs.openSync(logFile, "w", 0o600);
   let child: ChildProcess;
   try {
+    dropHandleInheritance();
     child = spawn(exe, args, { detached: true, stdio: ["ignore", "ignore", errFd] });
   } catch (err) {
     fs.closeSync(errFd);
@@ -220,6 +222,10 @@ export async function chromeCommand(args: string[]): Promise<number> {
     msg += `  full log: ${logFile}\n`;
     if (!headless && isLinux && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
       msg += "  hint: no DISPLAY/WAYLAND_DISPLAY is set; a headed Chrome needs a display (try --headless, or xvfb-run).\n";
+    }
+    // Windows: Chrome hands the launch to the instance that owns the profile and exits 21.
+    if (process.platform === "win32" && outcome.exitCode === 21) {
+      msg += "  hint: another Chrome already uses this profile (ProcessSingleton); close it or pick another --profile.\n";
     }
     process.stderr.write(msg);
     return EXIT_ERROR;

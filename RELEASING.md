@@ -47,7 +47,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The workflow verifies the tag matches `package.json`, builds and checksums four binaries, smoke-tests Linux x64, checks
+The workflow verifies the tag matches `package.json`, builds and checksums five binaries, smoke-tests Linux x64, checks
 the npm tarball, creates the GitHub release, and publishes npm with provenance. Verify afterward:
 
 ```bash

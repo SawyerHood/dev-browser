@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Windows x64 support: a `dev-browser-windows-x64.exe` release binary and CI on `windows-latest`.
+
 ## [1.0.0] - 2026-11-03
 
 - First stable 1.0 release: 1.0.0-rc.4 plus one fix. See the release candidates below for everything new since 0.2.9.

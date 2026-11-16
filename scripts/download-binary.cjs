@@ -40,16 +40,16 @@ function downloadBase() {
 
 /**
  * Asset name for this machine, or { error } when there is no prebuilt binary.
- * Windows gets a soft message (package.json has no "os" field on purpose).
+ * Unsupported platforms get a soft message (package.json has no "os" field on purpose).
  */
 function platformAsset() {
   const platformMap = { darwin: "darwin", linux: "linux", win32: "windows" };
   const archMap = { x64: "x64", arm64: "arm64" };
   const plat = platformMap[os.platform()];
   const arch = archMap[os.arch()];
-  if (!plat || !arch) return { error: `no prebuilt binary for ${os.platform()}/${os.arch()}` };
-  if (plat === "windows") return { error: "Windows is not supported yet (planned after 1.0)" };
-  return { asset: `dev-browser-${plat}-${arch}`, plat, arch };
+  const windows = plat === "windows"; // x64 only
+  if (!plat || !arch || (windows && arch !== "x64")) return { error: `no prebuilt binary for ${os.platform()}/${os.arch()}` };
+  return { asset: `dev-browser-${plat}-${arch}${windows ? ".exe" : ""}`, plat, arch };
 }
 
 function fetch(url, redirects = 0) {
@@ -136,6 +136,7 @@ function relinkGlobal(opts = {}) {
       opts.prefix ||
       env.npm_config_prefix ||
       execSync("npm prefix -g", { stdio: ["ignore", "pipe", "ignore"], env }).toString().trim();
+    if ((opts.platform || process.platform) === "win32") return relinkWindowsShims(prefix, dest, shim, opts.log);
     const link = path.join(prefix, "bin", "dev-browser");
     if (!fs.existsSync(link)) return false;
     if (!fs.lstatSync(link).isSymbolicLink()) return false;
@@ -149,13 +150,57 @@ function relinkGlobal(opts = {}) {
   }
 }
 
+/**
+ * Windows: npm writes dev-browser.cmd, dev-browser.ps1 and dev-browser (Git Bash) into the
+ * prefix dir. They run bin/dev-browser.cjs through its `#!/bin/sh` shebang, which cmd.exe and
+ * PowerShell cannot resolve. Point the ones that target THIS package at the binary, in the
+ * layouts read-cmd-shim parses, so npm still owns them on upgrade and uninstall.
+ */
+function relinkWindowsShims(prefix, dest, shim, log) {
+  // The prefix can be a junction (nvm-windows) while dest and shim are real paths.
+  const root = fs.realpathSync(prefix);
+  const rel = path.win32.relative(root, fs.realpathSync(dest));
+  if (rel.startsWith("..") || path.win32.isAbsolute(rel)) return false; // not installed under this prefix
+  const fwd = (p) => p.replace(/\\/g, "/");
+  const bin = fwd(rel);
+  const bodies = {
+    // npm's own preamble: a bare %~dp0 is wrong when the command is called quoted ("dev-browser").
+    "dev-browser.cmd":
+      "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n" +
+      `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%dp0%\\${rel}" %*\r\n`,
+    "dev-browser.ps1":
+      "#!/usr/bin/env pwsh\r\n" +
+      "$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\r\n" +
+      `if ($MyInvocation.ExpectingInput) { $input | & "$basedir/${bin}" $args } else { & "$basedir/${bin}" $args }\r\n` +
+      "exit $LASTEXITCODE\r\n",
+    "dev-browser": `#!/bin/sh\nbasedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")\nexec "$basedir/${bin}" "$@"\n`,
+  };
+  const relShim = fwd(path.win32.relative(root, fs.realpathSync(shim)));
+  const ours = (text) => fwd(text).includes(relShim);
+  let changed = false;
+  for (const [name, body] of Object.entries(bodies)) {
+    const file = path.join(prefix, name);
+    let text;
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    if (!ours(text)) continue;
+    fs.writeFileSync(file, body);
+    changed = true;
+  }
+  if (changed && log) log(`dev-browser: the dev-browser shims in ${prefix} now run the binary directly`);
+  return changed;
+}
+
 /** Human hint for "the binary is not here and cannot be fetched". */
 function manualHint() {
   const p = platformAsset();
   const asset = p.asset || "dev-browser-<os>-<arch>";
   const lines = [
     `  - run \`npm rebuild -g dev-browser\` (re-runs the download; make sure DEV_BROWSER_SKIP_DOWNLOAD is unset),`,
-    `  - or download ${asset} from ${downloadBase()} to ${binPath} and chmod +x it,`,
+    `  - or download ${asset} from ${downloadBase()} to ${binPath}${process.platform === "win32" ? "" : " and chmod +x it"},`,
     `  - or build from source: git clone https://github.com/${REPO} && bun run build.`,
   ];
   if (fs.existsSync(devEntry)) lines.push(`  - (dev checkout detected: the shim runs ${devEntry} with bun when no binary is present.)`);

@@ -4,6 +4,45 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { windowsProcessTable } from "../../src/daemon/browsers.ts";
+
+/** fs.existsSync for a socket file, which Windows cannot stat (EACCES). */
+export function socketExists(file: string): boolean {
+  try {
+    fs.accessSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * fs.rmSync for a directory a daemon or its Chrome used. Windows keeps their files locked
+ * until they exit, and a Chrome that a test orphaned on purpose never does: kill what still
+ * runs from `dir`, then retry for a while (Bun's fs.rmSync ignores maxRetries).
+ */
+export async function removeDir(dir: string): Promise<void> {
+  if (process.platform === "win32") {
+    for (const [pid, p] of await windowsProcessTable()) {
+      if (pid !== process.pid && p.cmdline.toLowerCase().includes(dir.toLowerCase())) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+  }
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      if (process.platform !== "win32" || attempt >= 20) throw err;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+}
 
 export interface CliResult {
   code: number;
@@ -56,7 +95,7 @@ export function makeCliEnv(prefix = "dev-browser-test-"): CliEnv {
         /* ignore */
       }
       await new Promise((r) => setTimeout(r, 200));
-      fs.rmSync(home, { recursive: true, force: true });
+      await removeDir(home);
     },
   };
 }

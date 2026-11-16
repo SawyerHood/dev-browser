@@ -1,5 +1,6 @@
 import { test, expect, afterAll, beforeAll } from "bun:test";
 import { withPage, closeBrowser } from "./helpers/browser.ts";
+import { expectRejects } from "./helpers/rejects.ts";
 import { startServer, type FixtureServer } from "./helpers/server.ts";
 import { getSnapshotState, lastTimings, diffLines } from "../src/page/snapshot/snapshot.ts";
 
@@ -130,7 +131,7 @@ test("scope by ref and by selector", async () => {
     expect(byRef).not.toContain("heading");
     const bySel = (await page.snapshot({ scope: "form" })) as string;
     expect(bySel).toBe(byRef);
-    await expect(page.snapshot({ scope: "#nope" })).rejects.toThrow(/matched no element/);
+    await expectRejects(page.snapshot({ scope: "#nope" }), /matched no element/);
   });
 });
 

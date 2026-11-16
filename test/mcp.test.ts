@@ -5,6 +5,7 @@ import { test, expect, afterAll, beforeAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { removeDir } from "./helpers/cli.ts";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 let home: string;
@@ -64,7 +65,7 @@ afterAll(async () => {
   }
   proc.kill();
   await new Promise((r) => setTimeout(r, 200));
-  fs.rmSync(home, { recursive: true, force: true });
+  await removeDir(home);
 });
 
 test("initialize + tools/list", async () => {

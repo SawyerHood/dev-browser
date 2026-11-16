@@ -73,9 +73,10 @@ function systemCandidates(): string[] {
       "Google\\Chrome\\Application\\chrome.exe",
       "Chromium\\Application\\chrome.exe",
       "Microsoft\\Edge\\Application\\msedge.exe",
+      "BraveSoftware\\Brave-Browser\\Application\\brave.exe",
     ];
     const out: string[] = [];
-    for (const r of roots) for (const s of rel) {
+    for (const s of rel) for (const r of roots) {
       const p = path.join(r, s);
       if (exists(p)) out.push(p);
     }

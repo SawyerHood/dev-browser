@@ -1,6 +1,7 @@
 /** Cross-origin traversal and document-scoped iframe ref lifecycle. */
 import { test, expect, afterAll, beforeAll } from "bun:test";
 import { withPage, closeBrowser, type DevBrowserPage } from "./helpers/browser.ts";
+import { expectRejects } from "./helpers/rejects.ts";
 import { startServer, type FixtureServer } from "./helpers/server.ts";
 
 let parent: FixtureServer;
@@ -50,8 +51,8 @@ async function navigateChild(page: DevBrowserPage, url: string) {
 }
 
 async function expectOldRefRejected(page: DevBrowserPage, ref: string): Promise<void> {
-  await expect(page.ref(ref)).rejects.toThrow(new RegExp(`Frame ${frameKey(ref)} .* (gone|navigated)`));
-  await expect(page.click(`ref/${ref}`)).rejects.toThrow(new RegExp(`Frame ${frameKey(ref)} .* (gone|navigated)`));
+  await expectRejects(page.ref(ref), new RegExp(`Frame ${frameKey(ref)} .* (gone|navigated)`));
+  await expectRejects(page.click(`ref/${ref}`), new RegExp(`Frame ${frameKey(ref)} .* (gone|navigated)`));
 }
 
 test("frame refs survive same-document navigation but never alias after reload, renderer swap, parent reload, or detach", async () => {
@@ -80,6 +81,8 @@ test("frame refs survive same-document navigation but never alias after reload, 
     const cross = childRef((await page.snapshot()) as string, "Cross child");
     expect(frameKey(cross)).not.toBe(frameKey(afterReload));
     await expectOldRefRejected(page, afterReload);
+    // On Windows, input may not reach the new frame right after the renderer swap.
+    if (process.platform === "win32") await page.waitForLoad();
     await page.click(`ref/${cross}`);
     expect(await (await page.ref(cross)).evaluate((e) => e.textContent)).toBe("Cross clicked");
 
@@ -151,7 +154,7 @@ test("delayed frame ref queries and actions cannot cross a document boundary", a
     await frame.goto(frame.url(), { waitUntil: "domcontentloaded" });
     const second = childRef((await page.snapshot()) as string, "Same child");
     releaseQuery();
-    await expect(delayedRef).rejects.toThrow(/stale or unknown/);
+    await expectRejects(delayedRef, /stale or unknown/);
     frame.$ = originalQuery;
 
     // Do the same for a side-effecting selector method. The delayed click must
@@ -172,7 +175,7 @@ test("delayed frame ref queries and actions cannot cross a document boundary", a
     await frame.goto(frame.url(), { waitUntil: "domcontentloaded" });
     const third = childRef((await page.snapshot()) as string, "Same child");
     releaseClick();
-    await expect(delayedClick).rejects.toThrow(/stale or unknown/);
+    await expectRejects(delayedClick, /stale or unknown/);
     frame.click = originalClick;
 
     expect(frameKey(second)).not.toBe(frameKey(third));
