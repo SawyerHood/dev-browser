@@ -162,7 +162,7 @@ describe("LineDecoder", () => {
 
 test("jailPath accepts downloads/<name> and nothing deeper", async () => {
   const { jailPath, paths } = await import("../../src/shared/paths.ts");
-  expect(jailPath("downloads/report (1).csv")).toBe(`${paths.tmp()}/downloads/report (1).csv`);
+  expect(jailPath("downloads/report (1).csv")).toBe(path.join(paths.tmp(), "downloads", "report (1).csv"));
   expect(() => jailPath("downloads/../x")).toThrow();
   expect(() => jailPath("downloads/a/b")).toThrow();
   expect(() => jailPath("other/x")).toThrow();

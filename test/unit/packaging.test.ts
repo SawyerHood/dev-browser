@@ -34,6 +34,7 @@ const dl = require(path.join(ROOT, "scripts/download-binary.cjs")) as {
     prefix?: string;
     dest?: string;
     shim?: string;
+    platform?: string;
     log?: (m: string) => void;
   }): boolean;
   manualHint(): string;
@@ -44,6 +45,11 @@ const ASSET = dl.platformAsset().asset!;
 /** The published package has no src/, so messages must not promise a bun/TypeScript fallback. */
 const NO_BUN_FALLBACK = /fall ?back to bun|TypeScript entry|runs? .*with bun|DEV_BROWSER_SKIP_DOWNLOAD=1 npm rebuild/i;
 const FAKE_BIN = Buffer.from(`#!/bin/sh\necho "fake-dev-browser $*"\nexit 0\n`);
+/** File name the package keeps its binary under (dev-browser-bin, or dev-browser-bin.exe on Windows). */
+const BIN_NAME = path.basename(dl.binPath);
+/** Tests that exec FAKE_BIN (a #!/bin/sh script) or build npm's symlink layout (admin or Developer Mode on Windows). */
+const posixTest = (name: string, fn: () => void | Promise<unknown>, t?: number) =>
+  bunTest.skipIf(!HAS_NODE || !HAS_NPM || process.platform === "win32")(name, fn, t);
 const tmpDirs: string[] = [];
 function tmp(prefix = "dev-browser-pkg-"): string {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -79,7 +85,7 @@ afterAll(async () => {
 
 describe("download-binary module", () => {
   test("platformAsset names a supported asset on this CI platform", () => {
-    expect(ASSET).toMatch(/^dev-browser-(linux|darwin)-(x64|arm64)$/);
+    expect(ASSET).toMatch(process.platform === "win32" ? /^dev-browser-windows-x64\.exe$/ : /^dev-browser-(linux|darwin)-(x64|arm64)$/);
   });
 
   test("default base is the GitHub release URL for package.json version", () => {
@@ -115,7 +121,7 @@ describe("download-binary module", () => {
     const r = await dl.downloadBinary({ base: goodBase, dest, log: (m) => logs.push(m) });
     expect(r.dest).toBe(dest);
     expect(fs.readFileSync(dest)).toEqual(FAKE_BIN);
-    expect(fs.statSync(dest).mode & 0o777).toBe(0o755);
+    if (process.platform !== "win32") expect(fs.statSync(dest).mode & 0o777).toBe(0o755); // no exec bit on Windows
     expect(fs.readdirSync(path.dirname(dest))).toEqual(["dev-browser-bin"]); // no leftover .tmp
     expect(logs.join("\n")).toContain(`downloading ${ASSET} v${dl.VERSION} from ${goodBase}`);
   });
@@ -176,7 +182,7 @@ describe("relinkGlobal", () => {
     return { prefix, shim, dest, link };
   }
 
-  test("does nothing for a project-local install (npm_config_global unset)", () => {
+  posixTest("does nothing for a project-local install (npm_config_global unset)", () => {
     const g = fakeGlobal();
     // npm sets npm_config_prefix to the *global* prefix even for local installs.
     const env = { npm_config_prefix: g.prefix };
@@ -186,7 +192,7 @@ describe("relinkGlobal", () => {
     expect(fs.realpathSync(g.link)).toBe(fs.realpathSync(g.shim));
   });
 
-  test("relinks for a global install whose link points at this package", () => {
+  posixTest("relinks for a global install whose link points at this package", () => {
     const g = fakeGlobal();
     const logs: string[] = [];
     const env = { npm_config_global: "true", npm_config_prefix: g.prefix };
@@ -196,7 +202,7 @@ describe("relinkGlobal", () => {
     expect(logs[0]).toContain("points directly at the binary");
   });
 
-  test("does not hijack a global link that points at a different dev-browser package", () => {
+  posixTest("does not hijack a global link that points at a different dev-browser package", () => {
     const g = fakeGlobal();
     // "this" package lives elsewhere (e.g. a project's node_modules) but the env says global.
     const other = tmp("dev-browser-other-");
@@ -210,7 +216,7 @@ describe("relinkGlobal", () => {
     expect(fs.realpathSync(g.link)).toBe(fs.realpathSync(g.shim));
   });
 
-  test("ignores a missing link or a non-symlink", () => {
+  posixTest("ignores a missing link or a non-symlink", () => {
     const g = fakeGlobal();
     fs.unlinkSync(g.link);
     const env = { npm_config_global: "true", npm_config_prefix: g.prefix };
@@ -218,6 +224,37 @@ describe("relinkGlobal", () => {
     fs.writeFileSync(g.link, "#!/bin/sh\n");
     expect(dl.relinkGlobal({ env, dest: g.dest, shim: g.shim })).toBe(false);
     expect(fs.lstatSync(g.link).isSymbolicLink()).toBe(false);
+  });
+
+  test("Windows: npm's shims for this package are rewritten to run the binary", () => {
+    // npm's Windows global layout: shims in the prefix dir itself, the package under prefix/node_modules.
+    const prefix = tmp("dev-browser-winprefix-");
+    const pkgBin = path.join(prefix, "node_modules", "dev-browser", "bin");
+    fs.mkdirSync(pkgBin, { recursive: true });
+    const opts = {
+      platform: "win32",
+      dest: path.join(pkgBin, "dev-browser-bin.exe"),
+      shim: path.join(pkgBin, "dev-browser.cjs"),
+      env: { npm_config_global: "true", npm_config_prefix: prefix } as Record<string, string | undefined>,
+    };
+    fs.writeFileSync(opts.dest, FAKE_BIN);
+    fs.writeFileSync(opts.shim, "// shim\n");
+    const cmd = path.join(prefix, "dev-browser.cmd");
+    const ps1 = path.join(prefix, "dev-browser.ps1");
+    const sh = path.join(prefix, "dev-browser");
+    const npmCmd = '"%_prog%"  "%dp0%\\node_modules\\dev-browser\\bin\\dev-browser.cjs" %*\r\n';
+    fs.writeFileSync(cmd, npmCmd);
+    fs.writeFileSync(ps1, '& "/bin/sh$exe"  "$basedir/node_modules/dev-browser/bin/dev-browser.cjs" $args\n');
+    fs.writeFileSync(sh, 'exec /bin/sh  "$basedir/node_modules/other-package/bin/dev-browser.cjs" "$@"\n');
+    // a project-local install is never touched
+    expect(dl.relinkGlobal({ ...opts, env: { npm_config_prefix: prefix } })).toBe(false);
+    expect(fs.readFileSync(cmd, "utf8")).toBe(npmCmd);
+    expect(dl.relinkGlobal(opts)).toBe(true);
+    // read-cmd-shim's layouts, so npm still owns these bins on upgrade and uninstall
+    expect(fs.readFileSync(cmd, "utf8")).toContain('"%dp0%\\node_modules\\dev-browser\\bin\\dev-browser-bin.exe" %*\r\n');
+    expect(fs.readFileSync(ps1, "utf8")).toContain('$input | & "$basedir/node_modules/dev-browser/bin/dev-browser-bin.exe" $args');
+    expect(fs.readFileSync(sh, "utf8")).toContain("other-package"); // another package's shim stays
+    expect(dl.relinkGlobal(opts)).toBe(false); // nothing of ours is left to rewrite
   });
 });
 
@@ -257,7 +294,7 @@ async function runNode(
 }
 
 describe("bin/dev-browser.cjs shim", () => {
-  test("self-heals: downloads the binary on first run, then runs it; second run does not download", async () => {
+  posixTest("self-heals: downloads the binary on first run, then runs it; second run does not download", async () => {
     const pkg = fakePackage();
     const shim = path.join(pkg, "bin/dev-browser.cjs");
     const hitsBefore = srv.hits.length;
@@ -274,7 +311,7 @@ describe("bin/dev-browser.cjs shim", () => {
     expect(srv.hits.length).toBe(hitsMid);
   });
 
-  test("passes the binary's exit code through", async () => {
+  posixTest("passes the binary's exit code through", async () => {
     const pkg = fakePackage();
     fs.writeFileSync(path.join(pkg, "bin/dev-browser-bin"), "#!/bin/sh\necho err >&2\nexit 124\n", { mode: 0o755 });
     const r = await runNode(path.join(pkg, "bin/dev-browser.cjs"), [], {}, pkg);
@@ -291,7 +328,7 @@ describe("bin/dev-browser.cjs shim", () => {
     expect(r.stderr).toContain("npm rebuild -g dev-browser");
     expect(r.stderr).toContain("http://127.0.0.1:1/x");
     expect(r.stderr).not.toMatch(NO_BUN_FALLBACK);
-    expect(fs.existsSync(path.join(pkg, "bin/dev-browser-bin"))).toBe(false);
+    expect(fs.existsSync(path.join(pkg, "bin", BIN_NAME))).toBe(false);
   });
 
   test("checksum mismatch refuses the binary", async () => {
@@ -299,7 +336,7 @@ describe("bin/dev-browser.cjs shim", () => {
     const r = await runNode(path.join(pkg, "bin/dev-browser.cjs"), ["--version"], { DEV_BROWSER_DOWNLOAD_BASE: badSumBase }, pkg);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("checksum mismatch");
-    expect(fs.existsSync(path.join(pkg, "bin/dev-browser-bin"))).toBe(false);
+    expect(fs.existsSync(path.join(pkg, "bin", BIN_NAME))).toBe(false);
   });
 
   test("DEV_BROWSER_SKIP_DOWNLOAD: does not download, explains how to fix", async () => {
@@ -324,7 +361,7 @@ describe("bin/dev-browser.cjs shim", () => {
 });
 
 describe("scripts/postinstall.cjs", () => {
-  test("installs from DEV_BROWSER_DOWNLOAD_BASE and does not touch a global link for a local install", async () => {
+  posixTest("installs from DEV_BROWSER_DOWNLOAD_BASE and does not touch a global link for a local install", async () => {
     const pkg = fakePackage();
     const prefix = tmp("dev-browser-prefix-");
     fs.mkdirSync(path.join(prefix, "bin"));
@@ -338,7 +375,7 @@ describe("scripts/postinstall.cjs", () => {
     expect(r.stdout).not.toContain("points directly");
   });
 
-  test("global install relinks the global `dev-browser` symlink at the binary", async () => {
+  posixTest("global install relinks the global `dev-browser` symlink at the binary", async () => {
     const pkg = fakePackage();
     const prefix = tmp("dev-browser-prefix-");
     fs.mkdirSync(path.join(prefix, "bin"));
@@ -363,7 +400,7 @@ describe("scripts/postinstall.cjs", () => {
     expect(r.stderr).toContain("retry the download on first run");
     expect(r.stderr).toContain("npm rebuild -g dev-browser");
     expect(r.stderr).toContain(`${srv.url("/missing")} to `);
-    expect(r.stderr).toContain("bin/dev-browser-bin");
+    expect(r.stderr).toContain(path.join("bin", BIN_NAME));
     expect(r.stderr).not.toMatch(NO_BUN_FALLBACK);
   });
 
@@ -372,7 +409,7 @@ describe("scripts/postinstall.cjs", () => {
     const r = await runNode(path.join(pkg, "scripts/postinstall.cjs"), [], { DEV_BROWSER_SKIP_DOWNLOAD: "1", DEV_BROWSER_DOWNLOAD_BASE: goodBase }, pkg);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("DEV_BROWSER_SKIP_DOWNLOAD set");
-    expect(fs.existsSync(path.join(pkg, "bin/dev-browser-bin"))).toBe(false);
+    expect(fs.existsSync(path.join(pkg, "bin", BIN_NAME))).toBe(false);
     const r2 = await runNode(path.join(ROOT, "scripts/postinstall.cjs"), [], { DEV_BROWSER_DOWNLOAD_BASE: "http://127.0.0.1:1/x" }, ROOT);
     expect(r2.code).toBe(0);
     expect(r2.stdout + r2.stderr).toBe("");

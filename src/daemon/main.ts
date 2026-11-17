@@ -68,13 +68,18 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<void> {
   const releaseEndpoint = () => {
     if (!ownsEndpoint) return;
     ownsEndpoint = false;
+    let pidFileIsOurs = false;
     try {
-      if (fs.readFileSync(paths.pid(), "utf8").trim() === String(process.pid)) fs.unlinkSync(paths.pid());
+      pidFileIsOurs = fs.readFileSync(paths.pid(), "utf8").trim() === String(process.pid);
+      if (pidFileIsOurs) fs.unlinkSync(paths.pid());
     } catch {
       /* gone or not ours */
     }
     try {
-      if (socketIno !== null && fs.statSync(socketPath).ino === socketIno) fs.unlinkSync(socketPath);
+      // Windows cannot stat a socket file (EACCES), so socketIno stays null there: the pid
+      // file, which a successor overwrites, stands in for the inode.
+      const ours = process.platform === "win32" ? pidFileIsOurs : socketIno !== null && fs.statSync(socketPath).ino === socketIno;
+      if (ours) fs.unlinkSync(socketPath);
     } catch {
       /* gone or not ours */
     }

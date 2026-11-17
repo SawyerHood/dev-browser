@@ -22,7 +22,10 @@
 
 // No top-level node:* imports here: this module is on the client's hot path
 // and `node:fs`/`node:path`/`node:os` cost several ms of startup under Bun.
-// Posix-only helpers (Windows lands after 1.0).
+// POSIX helpers; on Windows they also take drive (C:\) and UNC (\\server\share)
+// roots and either slash, and return backslash paths like node:path does.
+
+const IS_WIN = process.platform === "win32";
 
 type FsModule = typeof import("node:fs");
 let fsMod: FsModule | null = null;
@@ -32,18 +35,36 @@ export function lazyFs(): FsModule {
   return fsMod;
 }
 
+function toSlashes(p: string): string {
+  return IS_WIN ? p.replace(/\\/g, "/") : p;
+}
+
+/** Absolute on this platform: "/x"; on Windows also "C:\x", "C:/x" and "\\server\share". */
+export function isRooted(p: string): boolean {
+  return p.startsWith("/") || (IS_WIN && /^([A-Za-z]:)?[\\/]/.test(p));
+}
+
 export function joinPath(...parts: string[]): string {
   let out = "";
-  for (const part of parts) {
-    if (!part) continue;
-    if (part.startsWith("/")) out = part;
+  for (const raw of parts) {
+    if (!raw) continue;
+    const part = toSlashes(raw);
+    if (isRooted(raw)) out = part;
     else out = out.length === 0 || out.endsWith("/") ? out + part : out + "/" + part;
   }
   return normalizePath(out);
 }
 
+/** Windows root of a slashed path: "C:" or "//server/share" ("" if it has none). */
+function winRoot(p: string): string {
+  return /^[A-Za-z]:(?=\/)|^\/\/[^/]+\/[^/]+/.exec(p)?.[0] ?? "";
+}
+
 export function normalizePath(p: string): string {
-  const abs = p.startsWith("/");
+  p = toSlashes(p);
+  const root = IS_WIN ? winRoot(p) : ""; // kept as is
+  p = p.slice(root.length);
+  const abs = root !== "" || p.startsWith("/");
   const segs: string[] = [];
   for (const seg of p.split("/")) {
     if (seg === "" || seg === ".") continue;
@@ -55,12 +76,15 @@ export function normalizePath(p: string): string {
     segs.push(seg);
   }
   const joined = segs.join("/");
-  return abs ? "/" + joined : joined || ".";
+  const out = abs ? root + "/" + joined : joined || ".";
+  return IS_WIN ? out.replace(/\//g, "\\") : out;
 }
 
 export function resolvePath(p: string): string {
-  if (p.startsWith("/")) return normalizePath(p);
-  return normalizePath(process.cwd() + "/" + p);
+  if (!isRooted(p)) return normalizePath(process.cwd() + "/" + p);
+  // Windows: "\x" is rooted but names no drive, so it belongs to the current one.
+  if (IS_WIN && !winRoot(toSlashes(p))) return normalizePath(winRoot(toSlashes(process.cwd())) + p);
+  return normalizePath(p);
 }
 
 export function isAbsolutePath(p: string): boolean {
@@ -68,7 +92,7 @@ export function isAbsolutePath(p: string): boolean {
 }
 
 export function basename(p: string): string {
-  const i = p.lastIndexOf("/");
+  const i = Math.max(p.lastIndexOf("/"), IS_WIN ? p.lastIndexOf("\\") : -1);
   return i >= 0 ? p.slice(i + 1) : p;
 }
 

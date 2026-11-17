@@ -7,7 +7,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import puppeteer, { type Browser } from "puppeteer-core";
-import { makeCliEnv, type CliEnv } from "../helpers/cli.ts";
+import { makeCliEnv, socketExists, type CliEnv } from "../helpers/cli.ts";
 import { startServer, sleep, type FixtureServer } from "../helpers/server.ts";
 import { findChrome } from "../../src/shared/chrome.ts";
 import { VERSION } from "../../src/shared/version.ts";
@@ -105,7 +105,7 @@ describe("usage, version, help (no daemon needed)", () => {
     expect(r.code).toBe(0);
     const lines = r.stdout.trim().split("\n");
     expect(lines.length).toBeGreaterThanOrEqual(1);
-    expect(lines[0]).toMatch(/^(env|config|installed|system|playwright)\s+\//);
+    expect(lines[0]).toMatch(process.platform === "win32" ? /^(env|config|installed|system|playwright)\s+[A-Za-z]:[\\/]/ : /^(env|config|installed|system|playwright)\s+\//);
   });
 
   test("chrome with an unknown flag is a usage error", async () => {
@@ -116,7 +116,7 @@ describe("usage, version, help (no daemon needed)", () => {
   test("install-skill writes SKILL.md under HOME", async () => {
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "dev-browser-home-"));
     try {
-      const r = await cli.run(["install-skill", "--claude"], { env: { HOME: fakeHome } });
+      const r = await cli.run(["install-skill", "--claude"], { env: { HOME: fakeHome, USERPROFILE: fakeHome } });
       expect(r.code).toBe(0);
       const file = path.join(fakeHome, ".claude", "skills", "dev-browser", "SKILL.md");
       expect(r.stdout).toBe(`wrote ${file}\n`);
@@ -126,12 +126,12 @@ describe("usage, version, help (no daemon needed)", () => {
       expect(content).not.toContain("{{VERSION}}");
       expect(fs.existsSync(path.join(fakeHome, ".codex"))).toBe(false);
       // no flags: all three targets
-      const r2 = await cli.run(["install-skill"], { env: { HOME: fakeHome } });
+      const r2 = await cli.run(["install-skill"], { env: { HOME: fakeHome, USERPROFILE: fakeHome } });
       expect(r2.code).toBe(0);
       expect(fs.existsSync(path.join(fakeHome, ".codex", "skills", "dev-browser", "SKILL.md"))).toBe(true);
       expect(fs.existsSync(path.join(fakeHome, ".agents", "skills", "dev-browser", "SKILL.md"))).toBe(true);
       // unknown target
-      const r3 = await cli.run(["install-skill", "--vim"], { env: { HOME: fakeHome } });
+      const r3 = await cli.run(["install-skill", "--vim"], { env: { HOME: fakeHome, USERPROFILE: fakeHome } });
       expect(r3.code).toBe(2);
     } finally {
       fs.rmSync(fakeHome, { recursive: true, force: true });
@@ -143,7 +143,7 @@ describe("daemon and browser lifecycle", () => {
   test("first run spawns the daemon: pid file, socket, log", async () => {
     const r = await cli.run([...H, "-e", "'up'"]);
     expect(r).toEqual({ code: 0, stdout: "up\n", stderr: "" });
-    expect(fs.existsSync(path.join(cli.home, "daemon.sock"))).toBe(true);
+    expect(socketExists(path.join(cli.home, "daemon.sock"))).toBe(true);
     const pid = Number(fs.readFileSync(path.join(cli.home, "daemon.pid"), "utf8"));
     expect(pidAlive(pid)).toBe(true);
     expect(fs.readFileSync(path.join(cli.home, "daemon.log"), "utf8")).toMatch(/listening on/);
@@ -254,9 +254,11 @@ describe("daemon and browser lifecycle", () => {
     expect(pidAlive(oldPid)).toBe(true);
     process.kill(oldPid, "SIGTERM");
     expect(await waitFor(() => !pidAlive(oldPid), 10_000)).toBe(true);
-    // clean shutdown removes socket + pid file
-    expect(fs.existsSync(path.join(cli.home, "daemon.sock"))).toBe(false);
-    expect(fs.existsSync(pidFile)).toBe(false);
+    // clean shutdown removes socket + pid file (Windows has no SIGTERM: the kill is immediate and leaves both)
+    if (process.platform !== "win32") {
+      expect(fs.existsSync(path.join(cli.home, "daemon.sock"))).toBe(false);
+      expect(fs.existsSync(pidFile)).toBe(false);
+    }
     const r = await cli.run([...H, "-e", "'reborn'"]);
     expect(r).toEqual({ code: 0, stdout: "reborn\n", stderr: "" });
     const newPid = Number(fs.readFileSync(pidFile, "utf8"));
@@ -269,7 +271,7 @@ describe("daemon and browser lifecycle", () => {
     const oldPid = Number(fs.readFileSync(pidFile, "utf8"));
     process.kill(oldPid, "SIGKILL");
     expect(await waitFor(() => !pidAlive(oldPid), 10_000)).toBe(true);
-    expect(fs.existsSync(path.join(cli.home, "daemon.sock"))).toBe(true); // stale
+    expect(socketExists(path.join(cli.home, "daemon.sock"))).toBe(true); // stale
     // Chrome is orphaned (still holds the profile lock); the new daemon must reclaim the profile.
     const r = await cli.run([...H, "-e", "(await browser.getPage('after-kill')).url()"]);
     expect(r).toEqual({ code: 0, stdout: "about:blank\n", stderr: "" });
@@ -430,7 +432,7 @@ describe("client: version mismatch recovery", () => {
   test("an old daemon is asked to exit and the request is retried on a fresh one", async () => {
     await cli.run(["stop"]);
     const sockPath = path.join(cli.home, "daemon.sock");
-    expect(await waitFor(() => !fs.existsSync(sockPath), 10_000)).toBe(true);
+    expect(await waitFor(() => !socketExists(sockPath), 10_000)).toBe(true);
     // Fake "old daemon": speaks the protocol but with another version.
     const seen: string[] = [];
     const fake = net.createServer((sock) => {

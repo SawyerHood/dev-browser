@@ -15,7 +15,10 @@ const what = process.argv[2] ?? "all";
 const targetIdx = process.argv.indexOf("--target");
 const target = targetIdx > 0 ? process.argv[targetIdx + 1] : undefined;
 const outfileIdx = process.argv.indexOf("--outfile");
-const outfile = outfileIdx > 0 ? process.argv[outfileIdx + 1]! : path.join(root, "dist", "dev-browser");
+const outfileArg = outfileIdx > 0 ? process.argv[outfileIdx + 1]! : path.join(root, "dist", "dev-browser");
+// Bun appends .exe to a Windows binary.
+const windows = target ? target.startsWith("bun-windows-") : process.platform === "win32";
+const outfile = windows && !outfileArg.endsWith(".exe") ? outfileArg + ".exe" : outfileArg;
 
 delete process.env.NODE_PATH;
 fs.mkdirSync(path.join(root, "build"), { recursive: true });

@@ -23,7 +23,7 @@ function runBinary() {
     const why = r.error ? r.error.message : r.signal ? `killed by ${r.signal}` : "unknown error";
     console.error(`dev-browser: could not run the prebuilt binary ${bin}: ${why}`);
     console.error(
-      "dev-browser: hints: check `file " + bin + "` matches this OS/CPU (glibc x64/arm64 and macOS builds only; no musl/baseline yet);\n" +
+      "dev-browser: hints: check `file " + bin + "` matches this OS/CPU (glibc x64/arm64, macOS and Windows x64 builds only; no musl/baseline yet);\n" +
         "  if the download was truncated, delete it and rerun `dev-browser` (it re-downloads) or `npm rebuild -g dev-browser`;\n" +
         "  on a noexec mount or unsupported CPU: git clone https://github.com/" + dl.REPO + " && bun run build" +
         (fs.existsSync(dl.devEntry) ? "\n  (dev checkout: remove " + bin + " and the shim runs " + dl.devEntry + " with bun)." : "."),

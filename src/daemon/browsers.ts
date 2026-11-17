@@ -4,13 +4,15 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { promisify } from "node:util";
 import type { Browser, Target } from "puppeteer-core";
 import type { BrowserInfo, BrowserSourceSpec } from "../shared/protocol.ts";
 import { paths, sanitizeName } from "../shared/paths.ts";
 import type { FileLogger } from "../shared/log.ts";
 import { DEFAULTS } from "../shared/config.ts";
+import { dropHandleInheritance } from "../shared/win32.ts";
 import { PageRegistry } from "./pages.ts";
 import { keepBehind } from "../page/extend.ts";
 import { launchBrowser } from "./sources/launch.ts";
@@ -476,6 +478,58 @@ export function singletonLockPid(profileDir: string): number | null {
   }
 }
 
+type ProcessTable = Map<number, { ppid: number; cmdline: string; started: number }>;
+
+/** Windows: parent pid, command line and start time (ms) of every process, from one CIM query. */
+export async function windowsProcessTable(): Promise<ProcessTable> {
+  const table: ProcessTable = new Map();
+  const query =
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine," +
+    "@{n='Started';e={([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds()}} | ConvertTo-Json -Compress";
+  try {
+    dropHandleInheritance();
+    const { stdout } = await promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", query], {
+      windowsHide: true,
+      timeout: 4000, // below the 5 s after which a client takes the daemon for hung
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    for (const r of JSON.parse(stdout) as { ProcessId: number; ParentProcessId: number; CommandLine: string | null; Started: number | null }[]) {
+      table.set(r.ProcessId, { ppid: r.ParentProcessId, cmdline: r.CommandLine ?? "", started: r.Started ?? 0 });
+    }
+  } catch {
+    /* unknown: no holder is found */
+  }
+  return table;
+}
+
+/**
+ * classifyLockHolder probes for Windows, which has no SingletonLock symlink (Chrome locks
+ * <profile>\lockfile, which names no pid): the holder is the browser process (children
+ * carry --type=) started with this --user-data-dir.
+ */
+export function windowsLockProbe(profileDir: string, table: ProcessTable) {
+  const arg = `--user-data-dir=${profileDir}`;
+  let holder: number | null = null;
+  for (const [pid, p] of table) {
+    const i = p.cmdline.indexOf(arg);
+    // The argument must end right there: .../profile is not .../profile-headless.
+    if (i >= 0 && !p.cmdline.includes("--type=") && /^(["\s]|$)/.test(p.cmdline.slice(i + arg.length))) {
+      holder = pid;
+      break;
+    }
+  }
+  return {
+    lockPid: () => holder,
+    cmdline: (pid: number) => table.get(pid)?.cmdline ?? "",
+    // Windows never reparents and reuses pids: a "parent" that started after its child is someone else.
+    ppid: (pid: number) => {
+      const p = table.get(pid);
+      const parent = p && table.get(p.ppid);
+      return !p || (parent && parent.started > p.started) ? null : p.ppid;
+    },
+  };
+}
+
 export type LockHolder =
   | { kind: "none" }
   /** Lock points at a dead pid (or a different host): safe to clear. */
@@ -578,7 +632,8 @@ export async function reclaimProfile(
     return `pid ${pid} did not exit`;
   };
   for (;;) {
-    const holder = classifyLockHolder(profileDir, protectedPids());
+    const probe = process.platform === "win32" ? windowsLockProbe(profileDir, await windowsProcessTable()) : {};
+    const holder = classifyLockHolder(profileDir, protectedPids(), probe);
     switch (holder.kind) {
       case "none":
         // No lock yet Chrome said "already running": transient; let the caller retry.

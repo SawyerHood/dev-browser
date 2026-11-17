@@ -9,6 +9,7 @@ import type { LaunchSource } from "../../shared/protocol.ts";
 import { paths } from "../../shared/paths.ts";
 import { DEFAULTS } from "../../shared/config.ts";
 import { findChrome, ChromeNotFoundError } from "../../shared/chrome.ts";
+import { dropHandleInheritance } from "../../shared/win32.ts";
 import type { FileLogger } from "../../shared/log.ts";
 
 export const PROTOCOL_TIMEOUT_MS = 60_000;
@@ -119,8 +120,11 @@ export async function launchBrowser(
   if (!spec.headless) baseArgs.push("--window-size=1280,900");
   const isRoot = os.platform() === "linux" && typeof process.getuid === "function" && process.getuid() === 0;
 
-  const attempt = async (extra: string[]): Promise<Browser> =>
-    puppeteer.launch({
+  const attempt = async (extra: string[]): Promise<Browser> => {
+    // Chrome must not hold our sockets (Windows). Puppeteer spawns it before the event loop
+    // turns, so none opens in between.
+    dropHandleInheritance();
+    return puppeteer.launch({
       executablePath: chrome.path,
       headless: spec.headless,
       userDataDir,
@@ -133,6 +137,7 @@ export async function launchBrowser(
       handleSIGTERM: false,
       handleSIGHUP: false,
     });
+  };
 
   const t0 = Date.now();
   const cleanExitMarked = preparePrefs(userDataDir);

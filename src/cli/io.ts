@@ -55,6 +55,8 @@ export function flushAll(): void {
 }
 
 export function stdinIsTTY(): boolean {
+  // Windows has no libc, and dlopen() there would also search the current directory for these names.
+  if (process.platform === "win32") return !!process.stdin.isTTY;
   try {
     // bun:ffi is a builtin; dlopen of libc is ~2 ms vs ~7 ms for node:tty.
     const { dlopen, FFIType } = require("bun:ffi") as typeof import("bun:ffi");

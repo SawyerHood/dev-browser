@@ -7,6 +7,7 @@
  * runs register a per-page hook for "page console" lines instead.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isRooted } from "../shared/paths.ts";
 import type { Frame } from "../shared/protocol.ts";
 
 /** The part of a run's gate that Puppeteer prototype patches consult (see extend.ts). */
@@ -26,7 +27,7 @@ export interface ActiveRun {
 
 /** Resolve a script-supplied file path against the calling client's cwd (absolute paths pass through). */
 export function resolveRunPath(p: string): string {
-  if (typeof p !== "string" || p.length === 0 || p.startsWith("/")) return p;
+  if (typeof p !== "string" || p.length === 0 || isRooted(p)) return p;
   const base = currentRun()?.cwd;
   if (!base) return p;
   return base.endsWith("/") ? base + p : base + "/" + p;

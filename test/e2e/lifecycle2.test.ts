@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import puppeteer, { type Browser } from "puppeteer-core";
-import { makeCliEnv, type CliEnv } from "../helpers/cli.ts";
+import { makeCliEnv, removeDir, socketExists, type CliEnv } from "../helpers/cli.ts";
 import { startServer, sleep, type FixtureServer } from "../helpers/server.ts";
 import { findChrome } from "../../src/shared/chrome.ts";
 
@@ -81,8 +81,10 @@ describe("large requests (socket backpressure)", () => {
     fs.writeFileSync(file, bigScript);
     const r = await cli.run([...H, "run", file]);
     expect(r).toEqual({ code: 0, stdout: "1048576\n", stderr: "" });
-    const r2 = await cli.run([...H, "-e", `const s = ${JSON.stringify("x".repeat(100_000))}; s.length`]);
-    expect(r2).toEqual({ code: 0, stdout: "100000\n", stderr: "" });
+    // Windows caps a whole command line at 32767 chars; elsewhere argv takes 100 KB.
+    const n = process.platform === "win32" ? 30_000 : 100_000;
+    const r2 = await cli.run([...H, "-e", `const s = ${JSON.stringify("x".repeat(n))}; s.length`]);
+    expect(r2).toEqual({ code: 0, stdout: `${n}\n`, stderr: "" });
   }, 70_000);
 
   test("a 1 MB script through the compiled binary", async () => {
@@ -122,7 +124,7 @@ describe("large requests (socket backpressure)", () => {
     } finally {
       await runBin(["stop"]).catch(() => {});
       await sleep(200);
-      fs.rmSync(home, { recursive: true, force: true });
+      await removeDir(home);
     }
   }, 120_000);
 
@@ -241,7 +243,7 @@ describe("daemon shutdown does not delete the successor's endpoint", () => {
       await waitFor(() => !pidAlive(oldPid), 10_000);
       await sleep(300);
       const sockPath = path.join(cli.home, "daemon.sock");
-      expect(fs.existsSync(sockPath)).toBe(true);
+      expect(socketExists(sockPath)).toBe(true);
       const newPid = readPid(cli.home);
       expect(newPid).not.toBe(oldPid);
       expect(pidAlive(newPid)).toBe(true);
@@ -250,6 +252,19 @@ describe("daemon shutdown does not delete the successor's endpoint", () => {
       expect(again.stdout).toContain(`daemon   pid ${newPid},`);
     }
   }, 90_000);
+
+  // PowerShell hands its own stdout pipe down to every child as an extra inheritable handle.
+  test.skipIf(process.platform !== "win32")("a cold start under PowerShell does not keep the caller's pipe open", async () => {
+    await cli.run(["stop"]);
+    const proc = Bun.spawn(["powershell.exe", "-NoProfile", "-Command", `& '${process.execPath}' '${MAIN}' status`], {
+      env: { ...process.env, DEV_BROWSER_HOME: cli.home },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const out = await Promise.race([new Response(proc.stdout).text(), sleep(20_000).then(() => "stdout still open after 20 s")]);
+    expect(out).toContain("daemon   pid");
+  }, 40_000);
 });
 
 /* ------------------------------------------------------------------ */

@@ -8,7 +8,7 @@ import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { makeCliEnv, type CliEnv } from "../helpers/cli.ts";
+import { makeCliEnv, removeDir, type CliEnv } from "../helpers/cli.ts";
 import { startServer, sleep, type FixtureServer } from "../helpers/server.ts";
 
 let cli: CliEnv;
@@ -265,7 +265,9 @@ name`;
     expect(r.stderr).toBe("");
     expect(r.stdout.trim()).toBe("up.txt");
     for (const f of ["page.png", "el.png", "doc.pdf"]) expect(fs.existsSync(path.join(dir, f))).toBe(true);
-    fs.rmSync(dir, { recursive: true, force: true });
+    // Windows cannot delete up.txt while Chrome, which read it for the file input, keeps it open.
+    if (process.platform === "win32") await cli.run(["stop", "default"]);
+    await removeDir(dir);
   }, 30_000);
 });
 

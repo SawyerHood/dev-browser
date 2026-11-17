@@ -6,6 +6,7 @@
 import { test, expect, describe, afterAll, beforeAll } from "bun:test";
 import * as fs from "node:fs";
 import { getBrowser, newPage, withPage, closeBrowser } from "./helpers/browser.ts";
+import { expectRejects } from "./helpers/rejects.ts";
 import { ensureFront, withFront, withFrontWait, frontStateFor } from "../src/page/extend.ts";
 import { readDims } from "../src/page/shot.ts";
 import { RunGate, RunAbortedError, tame, renderResult, formatConsoleArgs } from "../src/daemon/run.ts";
@@ -167,7 +168,7 @@ describe("background tabs", () => {
       await a.waitForFunction(() => (window as unknown as { flag: boolean }).flag === true, { timeout: 4000 });
       expect(Date.now() - t1).toBeLessThan(3000);
       // withFrontWait bookkeeping unwinds on failure too
-      await expect(withFrontWait(a, async () => { throw new Error("boom"); })).rejects.toThrow("boom");
+      await expectRejects(withFrontWait(a, async () => { throw new Error("boom"); }), "boom");
       expect(frontStateFor(await getBrowser()).waiting).toBe(0);
     } finally {
       await a.close().catch(() => {});
@@ -288,11 +289,11 @@ describe("page.fill()", () => {
         d.addEventListener("input", () => (window as unknown as { ev: string[] }).ev.push("input"));
         d.addEventListener("change", () => (window as unknown as { ev: string[] }).ev.push("change"));
       });
-      await expect(page.fill("#ro", "x")).rejects.toThrow(/readonly/);
-      await expect(page.fill("#dis", "x")).rejects.toThrow(/disabled/);
-      await expect(page.fill("#cb", "x")).rejects.toThrow(/checkbox/);
-      await expect(page.fill("#sel", "b")).rejects.toThrow(/page\.select/);
-      await expect(page.fill("#date", "nope")).rejects.toThrow(/rejected "nope"/);
+      await expectRejects(page.fill("#ro", "x"), /readonly/);
+      await expectRejects(page.fill("#dis", "x"), /disabled/);
+      await expectRejects(page.fill("#cb", "x"), /checkbox/);
+      await expectRejects(page.fill("#sel", "b"), /page\.select/);
+      await expectRejects(page.fill("#date", "nope"), /rejected "nope"/);
       await page.fill("#date", "2024-03-03");
       const v = await page.evaluate(() => ({
         ro: (document.querySelector("#ro") as HTMLInputElement).value,
@@ -425,7 +426,7 @@ describe("run gate", () => {
       expect(page.listenerCount("console")).toBe(before);
       expect(page.listenerCount("dialog")).toBe(beforeDialog);
       // every call now rejects (asynchronously, so a retry loop cannot starve the event loop)
-      await expect(g.url() as unknown as Promise<unknown>).rejects.toThrow(RunAbortedError);
+      await expectRejects(g.url() as unknown as Promise<unknown>, RunAbortedError);
       let err: unknown;
       try {
         await g.evaluate(() => 1);
@@ -434,7 +435,7 @@ describe("run gate", () => {
       }
       expect(err).toBeInstanceOf(RunAbortedError);
       expect((err as Error).message).toBe("script deadline passed");
-      await expect(g.mouse.click(1, 1)).rejects.toThrow(RunAbortedError);
+      await expectRejects(g.mouse.click(1, 1), RunAbortedError);
       // the raw page is unaffected
       expect(await page.title()).toBe("Btn");
     });
@@ -452,11 +453,11 @@ describe("run gate", () => {
       expect(await withRun(run, async () => (await h.evaluate((e) => e.id)) as string)).toBe("b");
       gate.close("deadline passed");
       await withRun(run, async () => {
-        await expect(h.evaluate((e) => e.id)).rejects.toThrow(RunAbortedError);
-        await expect(h.click()).rejects.toThrow(RunAbortedError);
-        await expect(j.jsonValue()).rejects.toThrow(RunAbortedError);
-        await expect(f.evaluate(() => 1)).rejects.toThrow(RunAbortedError);
-        await expect(f.waitForSelector("#b")).rejects.toThrow(RunAbortedError);
+        await expectRejects(h.evaluate((e) => e.id), RunAbortedError);
+        await expectRejects(h.click(), RunAbortedError);
+        await expectRejects(j.jsonValue(), RunAbortedError);
+        await expectRejects(f.evaluate(() => 1), RunAbortedError);
+        await expectRejects(f.waitForSelector("#b"), RunAbortedError);
       });
       // outside any run (daemon internals, other runs) the same objects keep working
       expect(await h.evaluate((e) => e.id)).toBe("b");
@@ -475,7 +476,7 @@ describe("run gate", () => {
       await withRun({ id: "locator", emit: () => {}, gate }, async () => {
         const locator = g.locator("#b").setTimeout(3000);
         gate.close("ended");
-        await expect(locator.click()).rejects.toThrow(RunAbortedError);
+        await expectRejects(locator.click(), RunAbortedError);
       });
       expect(await page.evaluate(() => (window as unknown as { clicked?: number }).clicked ?? 0)).toBe(0);
     });
@@ -493,8 +494,8 @@ describe("run gate", () => {
       expect(contextPages.includes(g)).toBe(true);
       expect(contextPages.includes(page)).toBe(false);
       gate.close("ended");
-      await expect(context.pages()).rejects.toThrow(RunAbortedError);
-      await expect(context.newPage()).rejects.toThrow(RunAbortedError);
+      await expectRejects(context.pages(), RunAbortedError);
+      await expectRejects(context.newPage(), RunAbortedError);
     });
   });
 

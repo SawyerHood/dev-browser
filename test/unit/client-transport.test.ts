@@ -8,7 +8,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { tryConnect } from "../../src/cli/client.ts";
-import { canonicalCdpKey, classifyLockHolder, keyFor, chromePortPids } from "../../src/daemon/browsers.ts";
+import { canonicalCdpKey, classifyLockHolder, keyFor, chromePortPids, windowsLockProbe } from "../../src/daemon/browsers.ts";
 import { redactEndpoint } from "../../src/daemon/sources/cdp.ts";
 import { pickChromeForUser } from "../../src/cli/commands/chrome.ts";
 import { installedCandidates } from "../../src/shared/chrome.ts";
@@ -149,6 +149,24 @@ describe("profile lock safety predicate (classifyLockHolder)", () => {
       else process.env.DEV_BROWSER_HOME = prev;
     }
   });
+
+  test("Windows probe: the holder is the browser process started with exactly this --user-data-dir", () => {
+    const winDir = "C:\\Users\\u\\.dev-browser\\v1\\browsers\\work\\profile";
+    const table = new Map([
+      [10, { ppid: 4242, started: 50, cmdline: `chrome.exe --user-data-dir=${winDir}-headless --headless=new` }],
+      [11, { ppid: 12, started: 101, cmdline: `chrome.exe --type=renderer --user-data-dir=${winDir}` }],
+      [12, { ppid: 555, started: 100, cmdline: `chrome.exe "--user-data-dir=${winDir}" --remote-debugging-port=0` }],
+      [555, { ppid: 1, started: 90, cmdline: "dev-browser.exe daemon" }],
+    ]);
+    const probe = { ...windowsLockProbe(winDir, table), selfPid: 4242 };
+    expect(probe.lockPid()).toBe(12); // not the -headless sibling (10) or a --type= child (11)
+    const alive = (...pids: number[]) => (p: number) => pids.includes(p);
+    expect(classifyLockHolder(winDir, new Set(), { ...probe, alive: alive(12, 4242) })).toEqual({ kind: "orphan", pid: 12 });
+    expect(classifyLockHolder(winDir, new Set(), { ...probe, alive: alive(12, 555, 4242) })).toEqual({ kind: "foreign", pid: 12, ppid: 555 });
+    // pid 555 reused by a process that started after the Chrome: not its parent, so an orphan
+    table.get(555)!.started = 200;
+    expect(classifyLockHolder(winDir, new Set(), { ...probe, alive: alive(12, 555, 4242) })).toEqual({ kind: "orphan", pid: 12 });
+  });
 });
 
 describe("profile dirs", () => {
@@ -266,7 +284,8 @@ describe("--ignore-https-errors flag", () => {
 });
 
 describe("read-only DEV_BROWSER_HOME", () => {
-  test("ensureHome fails fast with a clear message", () => {
+  // chmod cannot make a directory read-only on Windows (it only toggles the file read-only attribute).
+  test.skipIf(process.platform === "win32")("ensureHome fails fast with a clear message", () => {
     if (typeof process.getuid === "function" && process.getuid() === 0) return; // root ignores modes
     const base = tmpDir("dev-browser-ro-");
     const home = path.join(base, "home");
